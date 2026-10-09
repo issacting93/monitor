@@ -1,0 +1,10 @@
+# Compiled binaries
+looper
+monitor_bin
+monitor_ui
+
+# Recordings
+*.wav
+
+# macOS
+.DS_Store
