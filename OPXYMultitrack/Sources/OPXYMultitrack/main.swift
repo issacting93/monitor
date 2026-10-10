@@ -1,0 +1,3 @@
+import XYKit
+
+runApp()

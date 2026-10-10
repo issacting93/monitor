@@ -1,31 +1,49 @@
-// monitor_ui.swift — OP-XY Monitor: USB audio monitoring, effects & recording
+// monitor_ui.swift — OP-XY Monitor: USB audio monitoring, effects, multitrack & recording
 //
-// Build:  SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk \
-//         swiftc monitor_ui.swift -o monitor_ui
+// Build:  SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk swiftc -parse-as-library monitor_ui.swift -o monitor_ui
 // Run:    ./monitor_ui
 
 import SwiftUI
 import AppKit
 import AVFoundation
 import CoreAudio
+import Darwin
 
 // ── Theme ────────────────────────────────────────────────────────────────────
 
 enum Theme {
-    static let bg            = Color(red: 0x26/255.0, green: 0x28/255.0, blue: 0x2B/255.0) // #26282B
-    static let surface       = Color(red: 0x2F/255.0, green: 0x32/255.0, blue: 0x36/255.0) // #2F3236
-    static let line          = Color(red: 0x3A/255.0, green: 0x3D/255.0, blue: 0x42/255.0) // #3A3D42
-    static let accent        = Color(red: 0xFF/255.0, green: 0x6B/255.0, blue: 0x1F/255.0) // #FF6B1F
-    static let textPrimary   = Color(red: 0xEC/255.0, green: 0xEA/255.0, blue: 0xE6/255.0) // #ECEAE6
-    static let textSecondary = Color(red: 0x8F/255.0, green: 0x93/255.0, blue: 0x9A/255.0) // #8F939A
-    static let textTertiary  = Color(red: 0x5C/255.0, green: 0x60/255.0, blue: 0x66/255.0) // #5C6066
-    static let danger        = Color(red: 0xF2/255.0, green: 0x47/255.0, blue: 0x3F/255.0) // #F2473F
-    static let eqColor       = Color(red: 0xC9/255.0, green: 0xB4/255.0, blue: 0x5C/255.0) // #C9B45C
-    static let reverbColor   = Color(red: 0x7F/255.0, green: 0xCF/255.0, blue: 0xB6/255.0) // #7FCFB6
-    static let delayColor    = Color(red: 0x8C/255.0, green: 0x96/255.0, blue: 0xF7/255.0) // #8C96F7
-    static let waveGray      = Color(red: 0x7A/255.0, green: 0x7E/255.0, blue: 0x85/255.0) // #7A7E85
+    static let bg            = Color(red: 0x14/255.0, green: 0x15/255.0, blue: 0x17/255.0)
+    static let surface       = Color(red: 0x1A/255.0, green: 0x1B/255.0, blue: 0x1E/255.0)
+    static let surfaceRaised = Color(red: 0x24/255.0, green: 0x26/255.0, blue: 0x2A/255.0)
+    static let surfaceInset  = Color(red: 0x0F/255.0, green: 0x10/255.0, blue: 0x12/255.0)
+    static let line          = Color(red: 0x2A/255.0, green: 0x2C/255.0, blue: 0x30/255.0)
+    static let bezel         = Color(red: 0x38/255.0, green: 0x3B/255.0, blue: 0x42/255.0)
+    static let accent        = Color(red: 0xFF/255.0, green: 0x6B/255.0, blue: 0x1F/255.0)
+    static let accentDim     = Color(red: 0xCC/255.0, green: 0x55/255.0, blue: 0x18/255.0)
+    static let textPrimary   = Color(red: 0xEC/255.0, green: 0xEA/255.0, blue: 0xE6/255.0)
+    static let textSecondary = Color(red: 0x8F/255.0, green: 0x93/255.0, blue: 0x9A/255.0)
+    static let textTertiary  = Color(red: 0x4A/255.0, green: 0x4D/255.0, blue: 0x53/255.0)
+    static let danger        = Color(red: 0xF2/255.0, green: 0x47/255.0, blue: 0x3F/255.0)
+    static let eqColor       = Color(red: 0xC9/255.0, green: 0xB4/255.0, blue: 0x5C/255.0)
+    static let reverbColor   = Color(red: 0x7F/255.0, green: 0xCF/255.0, blue: 0xB6/255.0)
+    static let delayColor    = Color(red: 0x8C/255.0, green: 0x96/255.0, blue: 0xF7/255.0)
+    static let waveGray      = Color(red: 0x4A/255.0, green: 0x4E/255.0, blue: 0x56/255.0)
 
-    static let waveformCount = 140
+    static let waveformCount = 200
+    static let trackCount    = 8
+    static let clipPeaks     = 64
+
+    static let trackColors: [Color] = [
+        Color(red: 0xFF/255.0, green: 0x6B/255.0, blue: 0x1F/255.0),
+        Color(red: 0xC9/255.0, green: 0xB4/255.0, blue: 0x5C/255.0),
+        Color(red: 0x7F/255.0, green: 0xCF/255.0, blue: 0xB6/255.0),
+        Color(red: 0x8C/255.0, green: 0x96/255.0, blue: 0xF7/255.0),
+        Color(red: 0xE0/255.0, green: 0x6B/255.0, blue: 0x74/255.0),
+        Color(red: 0x9A/255.0, green: 0xCC/255.0, blue: 0x5A/255.0),
+        Color(red: 0xC4/255.0, green: 0x8C/255.0, blue: 0xDB/255.0),
+        Color(red: 0x5C/255.0, green: 0xB8/255.0, blue: 0xDB/255.0),
+    ]
+    static func trackColor(_ i: Int) -> Color { trackColors[i % trackColors.count] }
 }
 
 // ── Models ───────────────────────────────────────────────────────────────────
@@ -39,13 +57,34 @@ struct Recording: Identifiable {
     let id = UUID()
     let url: URL
     let duration: TimeInterval
+    let trackIndex: Int
     var name: String { url.lastPathComponent }
     var durationString: String {
         String(format: "%d:%02d", Int(duration) / 60, Int(duration) % 60)
     }
 }
 
-private let reverbPresets: [(label: String, preset: AVAudioUnitReverbPreset)] = [
+struct TrackClip: Identifiable {
+    let id = UUID()
+    let url: URL
+    let duration: TimeInterval
+    var peaks: [Double] = []
+    var name: String { url.lastPathComponent }
+}
+
+struct TrackInfo: Identifiable {
+    let id: Int
+    var clips: [TrackClip] = []
+    var volume: Double = 0.8
+    var muted = false
+    var solo = false
+    var isPlaying = false
+    var loopProgress: Double = 0
+    var undoClips: [TrackClip]? = nil
+    var layerCount: Int { clips.count }
+}
+
+let reverbPresets: [(label: String, preset: AVAudioUnitReverbPreset)] = [
     ("Small Room",  .smallRoom),
     ("Medium Room", .mediumRoom),
     ("Large Room",  .largeRoom),
@@ -57,14 +96,71 @@ private let reverbPresets: [(label: String, preset: AVAudioUnitReverbPreset)] = 
     ("Cathedral",   .cathedral),
 ]
 
-private func reverbLabel(_ p: AVAudioUnitReverbPreset) -> String {
-    reverbPresets.first { $0.preset.rawValue == p.rawValue }?.label ?? "Unknown"
+// ── CoreAudio Global Helpers ─────────────────────────────────────────────────
+
+private let systemObjectID = AudioObjectID(kAudioObjectSystemObject)
+
+private func audioAddress(_ selector: AudioObjectPropertySelector,
+                          _ scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> AudioObjectPropertyAddress {
+    AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: kAudioObjectPropertyElementMain)
+}
+
+func allAudioDevices() -> [AudioDeviceID] {
+    var addr = audioAddress(kAudioHardwarePropertyDevices)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(systemObjectID, &addr, 0, nil, &size) == noErr else { return [] }
+    var ids = [AudioDeviceID](repeating: 0, count: Int(size) / MemoryLayout<AudioDeviceID>.size)
+    guard AudioObjectGetPropertyData(systemObjectID, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+    return ids
+}
+
+func nameOfDevice(_ id: AudioDeviceID) -> String {
+    var addr = audioAddress(kAudioObjectPropertyName)
+    var cfName: Unmanaged<CFString>?
+    var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+    guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, &cfName) == noErr,
+          let value = cfName?.takeRetainedValue() else { return "(unknown)" }
+    return value as String
+}
+
+func deviceChannelCount(_ id: AudioDeviceID, input: Bool) -> Int {
+    let scope: AudioObjectPropertyScope = input
+        ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput
+    var addr = audioAddress(kAudioDevicePropertyStreamConfiguration, scope)
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &size) == noErr, size > 0 else { return 0 }
+    let raw = UnsafeMutableRawPointer.allocate(byteCount: Int(size),
+                                               alignment: MemoryLayout<AudioBufferList>.alignment)
+    defer { raw.deallocate() }
+    guard AudioObjectGetPropertyData(id, &addr, 0, nil, &size, raw) == noErr else { return 0 }
+    let list = UnsafeMutableAudioBufferListPointer(raw.assumingMemoryBound(to: AudioBufferList.self))
+    return list.reduce(0) { $0 + Int($1.mNumberChannels) }
+}
+
+func getDefaultAudioDevice(input: Bool) -> AudioDeviceID {
+    let sel: AudioObjectPropertySelector = input
+        ? kAudioHardwarePropertyDefaultInputDevice
+        : kAudioHardwarePropertyDefaultOutputDevice
+    var addr = audioAddress(sel)
+    var id: AudioDeviceID = 0
+    var sz = UInt32(MemoryLayout<AudioDeviceID>.size)
+    AudioObjectGetPropertyData(systemObjectID, &addr, 0, nil, &sz, &id)
+    return id
+}
+
+func setDefaultAudioDevice(_ id: AudioDeviceID, input: Bool) {
+    let sel: AudioObjectPropertySelector = input
+        ? kAudioHardwarePropertyDefaultInputDevice
+        : kAudioHardwarePropertyDefaultOutputDevice
+    var addr = audioAddress(sel)
+    var dev = id
+    AudioObjectSetPropertyData(systemObjectID, &addr, 0, nil,
+                               UInt32(MemoryLayout<AudioDeviceID>.size), &dev)
 }
 
 // ── AudioManager ─────────────────────────────────────────────────────────────
 
 class AudioManager: ObservableObject {
-    // Published state
     @Published var inputDevices:     [AudioDevice] = []
     @Published var outputDevices:    [AudioDevice] = []
     @Published var selectedInputID:  AudioDeviceID?
@@ -72,8 +168,6 @@ class AudioManager: ObservableObject {
     @Published var isMonitoring = false
     @Published var isRecording  = false
     @Published var volume: Double = 0.85
-    @Published var level:  Double = 0
-    @Published var peak:   Double = 0
     @Published var levelL: Double = 0
     @Published var levelR: Double = 0
     @Published var peakL:  Double = 0
@@ -82,39 +176,55 @@ class AudioManager: ObservableObject {
     @Published var waveformSamples: [Double] = Array(repeating: 0, count: Theme.waveformCount)
     @Published var recordingDuration: TimeInterval = 0
     @Published var status = "Ready"
+    @Published var sampleRateString = "48 kHz · 24-bit · Stereo"
 
-    // Reverb
-    @Published var reverbEnabled = false
-    @Published var reverbPreset: AVAudioUnitReverbPreset = .mediumHall
-    @Published var reverbMix: Double = 40
-
-    // Delay
-    @Published var delayEnabled   = false
-    @Published var delayTime:     Double = 0.25
-    @Published var delayFeedback: Double = 30
-    @Published var delayMix:      Double = 25
-
-    // EQ
+    // Effects
     @Published var eqEnabled = false
     @Published var eqLow:  Double = 0
     @Published var eqMid:  Double = 0
     @Published var eqHigh: Double = 0
 
-    @Published var recordings: [Recording] = []
+    @Published var reverbEnabled = false
+    @Published var reverbPreset: AVAudioUnitReverbPreset = .mediumHall
+    @Published var reverbMix: Double = 40
 
-    // Audio engine internals
+    @Published var delayEnabled   = false
+    @Published var delayTime:     Double = 0.25
+    @Published var delayFeedback: Double = 30
+    @Published var delayMix:      Double = 25
+
+    @Published var showEffects = false
+
+    // Looper
+    @Published var bpm: Double = 120
+    @Published var metronomeEnabled = false
+    @Published var quantizeMode: Int = 0  // 0=OFF, 1=1 BAR, 2=1/2 BAR
+    static let quantizeLabels = ["OFF", "1 BAR", "½ BAR"]
+
+    // Multitrack
+    @Published var recordings: [Recording] = []
+    @Published var tracks: [TrackInfo] = (0..<Theme.trackCount).map { TrackInfo(id: $0) }
+    @Published var selectedTrack: Int = 0
+    @Published var isPlaying = false
+
+    // Audio Engine Internals
     private var engine:       AVAudioEngine?
     private var reverbNode:   AVAudioUnitReverb?
     private var delayNode:    AVAudioUnitDelay?
     private var eqNode:       AVAudioUnitEQ?
     private var outMixer:     AVAudioMixerNode?
+    var masterMixer:  AVAudioMixerNode?
     private var audioFile:    AVAudioFile?
     private var previousDefaultInput: AudioDeviceID?
+    private var playerNodes:  [AVAudioPlayerNode] = []
+    private var trackMixers:  [AVAudioMixerNode] = []
 
-    // Metering (written from audio thread, read from display timer — benign race)
-    private var rawLevel:  Float = 0
-    private var rawPeak:   Float = 0
-    private var peakHold:  Int   = 0
+    // Metronome
+    private var metronomeNode:  AVAudioPlayerNode?
+    private var metronomeTimer: Timer?
+    private var clickBuffer:    AVAudioPCMBuffer?
+
+    // Metering
     private var rawLevelL: Float = 0
     private var rawLevelR: Float = 0
     private var rawPeakL:  Float = 0
@@ -130,118 +240,164 @@ class AudioManager: ObservableObject {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"; return f
     }()
 
+    private static let tracksBaseURL: URL = {
+        let base = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Desktop/OP-XY Monitor/Tracks")
+        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        return base
+    }()
+
     init() {
         loadDevices()
         setupHardwareListeners()
     }
 
     deinit {
-        if isMonitoring { teardown() }
-        displayTimer?.invalidate()
-        recordingTimer?.invalidate()
+        stopMonitoring()
     }
 
-    // MARK: - Devices
-
     func loadDevices() {
-        let all     = enumerateDevices()
-        let inputs  = all.filter { channelCount(id: $0.id, input: true) > 0 }
-        let outputs = all.filter { channelCount(id: $0.id, input: false) > 0 }
+        let allIDs  = allAudioDevices()
+        let inputs  = allIDs.filter { deviceChannelCount($0, input: true) > 0 }
+                            .map { AudioDevice(id: $0, name: nameOfDevice($0)) }
+        let outputs = allIDs.filter { deviceChannelCount($0, input: false) > 0 }
+                            .map { AudioDevice(id: $0, name: nameOfDevice($0)) }
 
-        let apply = { [weak self] in
+        DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.inputDevices  = inputs
             self.outputDevices = outputs
 
-            // Re-validate selected input
-            if self.selectedInputID == nil ||
-               !inputs.contains(where: { $0.id == self.selectedInputID }) {
-                self.selectedInputID =
-                    inputs.first(where: { $0.name.localizedCaseInsensitiveContains("XY") })?.id
+            if self.selectedInputID == nil || !inputs.contains(where: { $0.id == self.selectedInputID }) {
+                self.selectedInputID = inputs.first(where: { $0.name.localizedCaseInsensitiveContains("XY") })?.id
                     ?? inputs.first(where: { $0.name.localizedCaseInsensitiveContains("OP") })?.id
                     ?? inputs.first?.id
             }
-            // Re-validate selected output (exclude the input instrument!)
-            let playbackOutputs = outputs.filter { $0.id != self.selectedInputID && !$0.name.localizedCaseInsensitiveContains("XY") }
-            let preferredOutput = playbackOutputs.first(where: {
-                $0.name.localizedCaseInsensitiveContains("speaker") ||
-                $0.name.localizedCaseInsensitiveContains("headphone") ||
-                $0.name.localizedCaseInsensitiveContains("macbook")
-            })?.id ?? playbackOutputs.first?.id ?? outputs.first?.id
 
-            if self.selectedOutputID == nil ||
-               !outputs.contains(where: { $0.id == self.selectedOutputID }) ||
-               self.selectedOutputID == self.selectedInputID {
-                let sysOut = self.currentSystemOutputID()
-                if let s = sysOut, playbackOutputs.contains(where: { $0.id == s }) {
-                    self.selectedOutputID = s
-                } else {
-                    self.selectedOutputID = preferredOutput
-                }
-            }
-            if let inName = inputs.first(where: { $0.id == self.selectedInputID })?.name,
-               let outName = outputs.first(where: { $0.id == self.selectedOutputID })?.name {
-                print("[Monitor] Active Devices — Input: \(inName) | Output: \(outName)")
+            let currentSysOut = getDefaultAudioDevice(input: false)
+            if self.selectedOutputID == nil || !outputs.contains(where: { $0.id == self.selectedOutputID }) {
+                self.selectedOutputID = currentSysOut != 0 ? currentSysOut : outputs.first?.id
             }
         }
-
-        // Run synchronously when already on main thread so that callers
-        // (init, startMonitoring, Refresh button) see results immediately.
-        if Thread.isMainThread { apply() }
-        else { DispatchQueue.main.async(execute: apply) }
     }
 
     private func setupHardwareListeners() {
-        var devAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDevices,
-            mScope:    kAudioObjectPropertyScopeGlobal,
-            mElement:  kAudioObjectPropertyElementMain)
-        AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject), &devAddr, DispatchQueue.main
-        ) { [weak self] _, _ in self?.loadDevices() }
+        var devAddr = audioAddress(kAudioHardwarePropertyDevices)
+        AudioObjectAddPropertyListenerBlock(systemObjectID, &devAddr, DispatchQueue.main) { [weak self] _, _ in
+            self?.loadDevices()
+        }
 
-        var outAddr = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope:    kAudioObjectPropertyScopeGlobal,
-            mElement:  kAudioObjectPropertyElementMain)
-        AudioObjectAddPropertyListenerBlock(
-            AudioObjectID(kAudioObjectSystemObject), &outAddr, DispatchQueue.main
-        ) { [weak self] _, _ in self?.loadDevices() }
+        var outAddr = audioAddress(kAudioHardwarePropertyDefaultOutputDevice)
+        AudioObjectAddPropertyListenerBlock(systemObjectID, &outAddr, DispatchQueue.main) { [weak self] _, _ in
+            self?.loadDevices()
+        }
     }
 
-    // MARK: - Monitor
-
     func startMonitoring() {
-        // Refresh devices if list is empty or selected input is stale
-        if inputDevices.isEmpty || selectedInputID == nil ||
-           !inputDevices.contains(where: { $0.id == selectedInputID }) {
-            loadDevices()
+        if inputDevices.isEmpty { loadDevices() }
+
+        guard let inID = selectedInputID,
+              let inDev = inputDevices.first(where: { $0.id == inID }) else {
+            status = "No input device selected"
+            return
         }
 
-        guard let inID = selectedInputID
-                ?? inputDevices.first(where: { $0.name.localizedCaseInsensitiveContains("XY") })?.id
-                ?? inputDevices.first?.id,
-              let inDev = inputDevices.first(where: { $0.id == inID })
-        else { status = "No input device — connect OP-XY"; return }
-
-        selectedInputID = inID
-        startEngine(inputID: inID, outputID: selectedOutputID, failedOutputIDs: [])
-
-        if isMonitoring {
-            let outName = selectedOutputID
-                .flatMap { id in outputDevices.first { $0.id == id }?.name }
-                ?? "system output"
-            status = "\(inDev.name) \u{2192} \(outName)"
-            startDisplayTimer()
+        let currentOutID = getDefaultAudioDevice(input: false)
+        if currentOutID == inID {
+            status = "Output set to \(inDev.name) — change output in System Settings to avoid loopback"
+            return
         }
+
+        previousDefaultInput = getDefaultAudioDevice(input: true)
+        setDefaultAudioDevice(inID, input: true)
+
+        let eng = AVAudioEngine()
+        let hwFmt = eng.inputNode.inputFormat(forBus: 0)
+
+        guard hwFmt.sampleRate > 0, hwFmt.channelCount > 0 else {
+            status = "No usable input format — check Microphone permissions"
+            restoreDefaultInput()
+            return
+        }
+
+        let stereoFmt = AVAudioFormat(standardFormatWithSampleRate: hwFmt.sampleRate, channels: 2) ?? hwFmt
+
+        let eq      = buildEQ()
+        let reverb  = buildReverb()
+        let delay   = buildDelay()
+        let liveMix = AVAudioMixerNode()
+        let master  = AVAudioMixerNode()
+
+        eng.attach(eq); eng.attach(reverb); eng.attach(delay)
+        eng.attach(liveMix); eng.attach(master)
+
+        eng.connect(eng.inputNode,     to: eng.mainMixerNode, format: hwFmt)
+        eng.mainMixerNode.outputVolume = 1.0
+        eng.connect(eng.mainMixerNode, to: eq,                format: stereoFmt)
+        eng.connect(eq,                to: reverb,            format: stereoFmt)
+        eng.connect(reverb,            to: delay,             format: stereoFmt)
+        eng.connect(delay,             to: liveMix,           format: stereoFmt)
+        eng.connect(liveMix,           to: master,            format: stereoFmt)
+
+        var players: [AVAudioPlayerNode] = []
+        var trkMixers: [AVAudioMixerNode] = []
+        for i in 0..<Theme.trackCount {
+            let player = AVAudioPlayerNode()
+            let trkMix = AVAudioMixerNode()
+            eng.attach(player); eng.attach(trkMix)
+            eng.connect(player, to: trkMix, format: stereoFmt)
+            eng.connect(trkMix, to: master, format: stereoFmt)
+            trkMix.outputVolume = Float(tracks[i].volume)
+            players.append(player)
+            trkMixers.append(trkMix)
+        }
+
+        let metroNode = AVAudioPlayerNode()
+        eng.attach(metroNode)
+        eng.connect(metroNode, to: master, format: stereoFmt)
+
+        eng.connect(master, to: eng.outputNode, format: nil)
+        master.outputVolume = Float(volume)
+
+        liveMix.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buf, _ in
+            self?.processTap(buf)
+        }
+
+        eng.prepare()
+        do {
+            try eng.start()
+        } catch {
+            status = "Engine failure: \(error.localizedDescription)"
+            restoreDefaultInput()
+            return
+        }
+
+        engine       = eng
+        reverbNode   = reverb
+        delayNode    = delay
+        eqNode       = eq
+        outMixer     = liveMix
+        masterMixer  = master
+        playerNodes    = players
+        trackMixers    = trkMixers
+        metronomeNode  = metroNode
+        clickBuffer    = generateClickBuffer(sampleRate: hwFmt.sampleRate)
+        isMonitoring   = true
+
+        let outName = nameOfDevice(currentOutID)
+        status = "\(inDev.name) → \(outName)"
+        sampleRateString = "\(Int(hwFmt.sampleRate / 1000)) kHz · 24-bit · Stereo"
+        startDisplayTimer()
+        if metronomeEnabled { startMetronome() }
     }
 
     func stopMonitoring() {
         if isRecording { stopRecording() }
+        if isPlaying   { stopPlayback() }
         teardown()
+        restoreDefaultInput()
         isMonitoring = false
         displayTimer?.invalidate(); displayTimer = nil
-        level = 0; peak = 0
         levelL = 0; levelR = 0; peakL = 0; peakR = 0
         peakDB = -Double.infinity
         waveformSamples = Array(repeating: 0, count: Theme.waveformCount)
@@ -250,146 +406,34 @@ class AudioManager: ObservableObject {
 
     func switchOutput(to id: AudioDeviceID) {
         selectedOutputID = id
-        guard isMonitoring, let inID = selectedInputID else { return }
-        let wasRecording = isRecording
-        if wasRecording { stopRecording() }
-        teardown()
-        startEngine(inputID: inID, outputID: id, failedOutputIDs: [])
-        if wasRecording { startRecording() }
-        let inName  = inputDevices.first { $0.id == inID }?.name ?? "input"
-        let outName = outputDevices.first { $0.id == id }?.name ?? "output"
-        if isMonitoring { status = "\(inName) \u{2192} \(outName)" }
-    }
-
-    func applyVolume(_ v: Double) {
-        volume = v
-        outMixer?.outputVolume = Float(v)
-    }
-
-    // MARK: - Engine lifecycle
-
-    private func startEngine(inputID: AudioDeviceID, outputID: AudioDeviceID?,
-                             failedOutputIDs: Set<AudioDeviceID>) {
-        var currentFailed = failedOutputIDs
-        if let outID = outputID { currentFailed.insert(outID) }
-
-        let eng = AVAudioEngine()
-
-        // 1. Set the input device as the system default input (restored on stop).
-        //    Don't pin via AudioUnitSetProperty — that can silently redirect the
-        //    output node onto the same device.
-        previousDefaultInput = getDefaultInputID()
-        setDefaultInput(inputID)
-        print("[Monitor] Set default input: \(deviceName(previousDefaultInput ?? 0)) \u{2192} \(deviceName(inputID))")
-
-        // 2. Check output isn't the input device
-        let currentOutput = defaultOutputDeviceID()
-        if currentOutput == inputID {
-            status = "Output is set to \(deviceName(inputID)) \u{2014} change in Sound settings"
-            restoreDefaultInput()
-            return
-        }
-
-        // 3. Query formats — engine uses system defaults for both sides
-        let hwFmt = eng.inputNode.inputFormat(forBus: 0)
-        let inFmt = AVAudioFormat(standardFormatWithSampleRate: hwFmt.sampleRate,
-                                  channels: hwFmt.channelCount) ?? hwFmt
-        guard inFmt.sampleRate > 0 else {
-            status = "No usable format \u{2014} check Microphone permission"
-            restoreDefaultInput()
-            return
-        }
-
-        let stereoFmt = AVAudioFormat(standardFormatWithSampleRate: inFmt.sampleRate,
-                                      channels: 2) ?? inFmt
-
-        print("[Monitor] Input: \(inFmt.sampleRate) Hz \(inFmt.channelCount)ch")
-        print("[Monitor] Output: \(deviceName(currentOutput))")
-
-        // Chain: inputNode → mainMixer → EQ → Reverb → Delay → outMixer → outputNode
-        let eq      = buildEQ()
-        let reverb  = buildReverb()
-        let delay   = buildDelay()
-        let mixer   = AVAudioMixerNode()
-        eng.attach(eq); eng.attach(reverb); eng.attach(delay); eng.attach(mixer)
-
-        eng.connect(eng.inputNode,     to: eng.mainMixerNode, format: inFmt)
-        eng.mainMixerNode.outputVolume = 1.0
-        eng.connect(eng.mainMixerNode, to: eq,                format: stereoFmt)
-        eng.connect(eq,                to: reverb,            format: stereoFmt)
-        eng.connect(reverb,            to: delay,             format: stereoFmt)
-        eng.connect(delay,             to: mixer,             format: stereoFmt)
-
-        // Let the engine negotiate the output format
-        eng.connect(mixer, to: eng.outputNode, format: nil)
-
-        mixer.outputVolume = Float(volume)
-
-        // Metering & recording tap on the output mixer (post-effects)
-        mixer.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buf, _ in
-            self?.processTap(buf)
-        }
-
-        eng.prepare()
-        do {
-            try eng.start()
-            print("[Monitor] Engine running — outputNode in: \(eng.outputNode.inputFormat(forBus: 0).sampleRate) Hz")
-        } catch {
-            print("[Monitor] Engine start FAILED: \(error)")
-            handleOutputFailure(inputID: inputID, failedOutputID: outputID,
-                                failedOutputIDs: currentFailed,
-                                error: error.localizedDescription)
-            return
-        }
-
-        engine       = eng
-        reverbNode   = reverb
-        delayNode    = delay
-        eqNode       = eq
-        outMixer     = mixer
-        isMonitoring = true
-    }
-
-    private func handleOutputFailure(inputID: AudioDeviceID, failedOutputID: AudioDeviceID?,
-                                     failedOutputIDs: Set<AudioDeviceID>, error: String) {
-        if let fallback = fallbackOutput(excluding: failedOutputIDs) {
-            let failedName = failedOutputID.flatMap { id in
-                outputDevices.first { $0.id == id }?.name
-            } ?? "output"
-            let fbName = outputDevices.first { $0.id == fallback }?.name ?? "built-in"
-            DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
-                self.selectedOutputID = fallback
-                self.status = "\(failedName) unavailable \u{2014} routed to \(fbName)"
-                self.startEngine(inputID: inputID, outputID: fallback,
-                                 failedOutputIDs: failedOutputIDs)
-            }
-        } else {
-            isMonitoring = false
-            status = "Output error: \(error)"
+        if isMonitoring {
+            stopMonitoring()
+            startMonitoring()
         }
     }
 
     private func teardown() {
+        stopMetronome()
         outMixer?.removeTap(onBus: 0)
         engine?.stop()
-        engine     = nil
-        reverbNode = nil
-        delayNode  = nil
-        eqNode     = nil
-        outMixer   = nil
-        restoreDefaultInput()
+        engine        = nil
+        reverbNode    = nil
+        delayNode     = nil
+        eqNode        = nil
+        outMixer      = nil
+        masterMixer   = nil
+        metronomeNode = nil
+        clickBuffer   = nil
+        playerNodes   = []
+        trackMixers   = []
     }
 
     private func restoreDefaultInput() {
         if let prev = previousDefaultInput {
-            setDefaultInput(prev)
-            print("[Monitor] Restored default input: \(deviceName(prev))")
+            setDefaultAudioDevice(prev, input: true)
             previousDefaultInput = nil
         }
     }
-
-    // MARK: - Metering
 
     private func processTap(_ buf: AVAudioPCMBuffer) {
         guard let data = buf.floatChannelData else { return }
@@ -397,12 +441,10 @@ class AudioManager: ObservableObject {
         guard n > 0 else { return }
         let channels = Int(buf.format.channelCount)
 
-        // RMS of channel 0 (L)
         var sumL: Float = 0
         for i in 0..<n { sumL += data[0][i] * data[0][i] }
         let rmsL = sqrt(sumL / Float(n))
 
-        // RMS of channel 1 (R) — fallback to L if mono
         let rmsR: Float
         if channels > 1 {
             var sumR: Float = 0
@@ -412,60 +454,57 @@ class AudioManager: ObservableObject {
             rmsR = rmsL
         }
 
-        let rms = max(rmsL, rmsR)
-
-        rawLevel  = rms
         rawLevelL = rmsL
         rawLevelR = rmsR
 
-        if rms >= rawPeak { rawPeak = rms; peakHold = 0 }
-        else { peakHold += 1; if peakHold > 43 { rawPeak *= 0.93 } }
-
         if rmsL >= rawPeakL { rawPeakL = rmsL; peakHoldL = 0 }
-        else { peakHoldL += 1; if peakHoldL > 43 { rawPeakL *= 0.93 } }
+        else { peakHoldL += 1; if peakHoldL > 30 { rawPeakL *= 0.94 } }
 
         if rmsR >= rawPeakR { rawPeakR = rmsR; peakHoldR = 0 }
-        else { peakHoldR += 1; if peakHoldR > 43 { rawPeakR *= 0.93 } }
+        else { peakHoldR += 1; if peakHoldR > 30 { rawPeakR *= 0.94 } }
 
-        // Write to recording file
         if let file = audioFile { try? file.write(from: buf) }
     }
 
     private func startDisplayTimer() {
         displayTimer?.invalidate()
-        displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) {
-            [weak self] _ in
+        displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             guard let self else { return }
-            let scaled     = Double(min(self.rawLevel * 5, 1))
-            let scaledPeak = Double(min(self.rawPeak * 5, 1))
-            let scaledL     = Double(min(self.rawLevelL * 5, 1))
-            let scaledR     = Double(min(self.rawLevelR * 5, 1))
-            let scaledPeakL = Double(min(self.rawPeakL * 5, 1))
-            let scaledPeakR = Double(min(self.rawPeakR * 5, 1))
+            let scaledL     = Double(min(self.rawLevelL * 4.5, 1))
+            let scaledR     = Double(min(self.rawLevelR * 4.5, 1))
+            let scaledPeakL = Double(min(self.rawPeakL * 4.5, 1))
+            let scaledPeakR = Double(min(self.rawPeakR * 4.5, 1))
             let maxPeak     = Double(max(self.rawPeakL, self.rawPeakR))
+
             DispatchQueue.main.async {
-                self.level = self.level * 0.72 + scaled * 0.28
-                self.peak  = scaledPeak
-                self.levelL = self.levelL * 0.72 + scaledL * 0.28
-                self.levelR = self.levelR * 0.72 + scaledR * 0.28
+                self.levelL = self.levelL * 0.70 + scaledL * 0.30
+                self.levelR = self.levelR * 0.70 + scaledR * 0.30
                 self.peakL  = scaledPeakL
                 self.peakR  = scaledPeakR
-                // Peak dB readout
-                if maxPeak > 0 {
-                    self.peakDB = 20.0 * log10(maxPeak)
-                } else {
-                    self.peakDB = -Double.infinity
-                }
-                // Shift waveform buffer
+                self.peakDB = maxPeak > 0 ? 20.0 * log10(maxPeak) : -Double.infinity
+
                 var samples = self.waveformSamples
                 samples.removeFirst()
-                samples.append(self.level)
+                samples.append((self.levelL + self.levelR) / 2.0)
                 self.waveformSamples = samples
+
+                // Update loop progress for each playing track
+                for i in 0..<min(self.tracks.count, self.playerNodes.count) {
+                    if self.tracks[i].isPlaying,
+                       let nodeTime = self.playerNodes[i].lastRenderTime,
+                       nodeTime.isSampleTimeValid,
+                       let playerTime = self.playerNodes[i].playerTime(forNodeTime: nodeTime),
+                       let clip = self.tracks[i].clips.last {
+                        let totalFrames = clip.duration * playerTime.sampleRate
+                        if totalFrames > 0 {
+                            let pos = Double(playerTime.sampleTime).truncatingRemainder(dividingBy: totalFrames)
+                            self.tracks[i].loopProgress = max(0, pos / totalFrames)
+                        }
+                    }
+                }
             }
         }
     }
-
-    // MARK: - Effects — build
 
     private func buildEQ() -> AVAudioUnitEQ {
         let eq = AVAudioUnitEQ(numberOfBands: 3)
@@ -495,52 +534,92 @@ class AudioManager: ObservableObject {
         return d
     }
 
-    // MARK: - Effects — live update
-
-    func applyReverb() {
-        reverbNode?.wetDryMix = Float(reverbMix)
-        reverbNode?.bypass    = !reverbEnabled
-    }
-    func changeReverbPreset(_ p: AVAudioUnitReverbPreset) {
-        reverbPreset = p
-        reverbNode?.loadFactoryPreset(p)
-        reverbNode?.wetDryMix = Float(reverbMix)
-    }
+    func applyReverb() { reverbNode?.wetDryMix = Float(reverbMix); reverbNode?.bypass = !reverbEnabled }
     func applyDelay() {
-        delayNode?.delayTime = delayTime
-        delayNode?.feedback  = Float(delayFeedback)
-        delayNode?.wetDryMix = Float(delayMix)
-        delayNode?.bypass    = !delayEnabled
+        delayNode?.delayTime = delayTime; delayNode?.feedback = Float(delayFeedback)
+        delayNode?.wetDryMix = Float(delayMix); delayNode?.bypass = !delayEnabled
     }
     func applyEQ() {
-        eqNode?.bands[0].gain = Float(eqLow)
-        eqNode?.bands[1].gain = Float(eqMid)
-        eqNode?.bands[2].gain = Float(eqHigh)
-        eqNode?.bypass        = !eqEnabled
+        eqNode?.bands[0].gain = Float(eqLow); eqNode?.bands[1].gain = Float(eqMid)
+        eqNode?.bands[2].gain = Float(eqHigh); eqNode?.bypass = !eqEnabled
     }
 
-    // MARK: - Recording
+    // ── Metronome ───────────────────────────────────────────────────────────
+
+    func toggleMetronome() {
+        metronomeEnabled.toggle()
+        if metronomeEnabled && isMonitoring {
+            startMetronome()
+        } else {
+            stopMetronome()
+        }
+    }
+
+    func setBPM(_ newBPM: Double) {
+        bpm = max(40, min(300, newBPM))
+        if metronomeEnabled && isMonitoring {
+            startMetronome()
+        }
+    }
+
+    private func startMetronome() {
+        stopMetronome()
+        guard let node = metronomeNode, clickBuffer != nil else { return }
+        if !node.isPlaying { node.play() }
+        playClick()
+        let interval = 60.0 / bpm
+        metronomeTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            self?.playClick()
+        }
+    }
+
+    private func stopMetronome() {
+        metronomeTimer?.invalidate()
+        metronomeTimer = nil
+    }
+
+    private func playClick() {
+        guard let node = metronomeNode, let buf = clickBuffer else { return }
+        node.scheduleBuffer(buf, at: nil, options: [], completionHandler: nil)
+    }
+
+    private func generateClickBuffer(sampleRate: Double) -> AVAudioPCMBuffer? {
+        let clickDuration = 0.015
+        let frameCount = AVAudioFrameCount(sampleRate * clickDuration)
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 2),
+              let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return nil }
+        buffer.frameLength = frameCount
+        guard let data = buffer.floatChannelData else { return nil }
+
+        let freq: Float = 880
+        for i in 0..<Int(frameCount) {
+            let t = Float(i) / Float(sampleRate)
+            let envelope = exp(-Float(i) / Float(frameCount) * 4.0)
+            let sample = sin(2 * .pi * freq * t) * envelope * 0.5
+            data[0][i] = sample
+            if buffer.format.channelCount > 1 { data[1][i] = sample }
+        }
+        return buffer
+    }
 
     func startRecording() {
         guard isMonitoring, let eng = engine else { return }
         let fmt  = eng.mainMixerNode.outputFormat(forBus: 0)
-        let name = "recording_\(Self.timestampFmt.string(from: Date())).wav"
-        let url  = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop/\(name)")
+        let name = "take_\(Self.timestampFmt.string(from: Date())).wav"
+        let url  = trackFolder(selectedTrack).appendingPathComponent(name)
         do {
             audioFile = try AVAudioFile(forWriting: url, settings: fmt.settings,
                                         commonFormat: .pcmFormatFloat32, interleaved: false)
             recordingStart    = Date()
             recordingDuration = 0
             isRecording       = true
-            status            = "Recording \u{2192} \(name)"
-            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) {
-                [weak self] _ in
+            status            = "Recording TRK \(String(format: "%02d", selectedTrack + 1))"
+            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 guard let self, let s = self.recordingStart else { return }
                 DispatchQueue.main.async { self.recordingDuration = Date().timeIntervalSince(s) }
             }
         } catch {
-            status = "Cannot create file: \(error.localizedDescription)"
+            status = "Recording error: \(error.localizedDescription)"
         }
     }
 
@@ -548,1075 +627,1192 @@ class AudioManager: ObservableObject {
         recordingTimer?.invalidate(); recordingTimer = nil
         let saved = audioFile?.url
         let dur   = recordingDuration
+        let trk   = selectedTrack
         audioFile   = nil
         isRecording = false
-        if let u = saved {
-            status = "Saved \(u.lastPathComponent)"
-            DispatchQueue.main.async { self.recordings.append(Recording(url: u, duration: dur)) }
+
+        guard let u = saved else { return }
+        let peaks = computePeaks(url: u, count: Theme.clipPeaks)
+        let clip  = TrackClip(url: u, duration: dur, peaks: peaks)
+        let rec   = Recording(url: u, duration: dur, trackIndex: trk)
+
+        status = "Saved \(u.lastPathComponent) → TRK \(String(format: "%02d", trk + 1))"
+        DispatchQueue.main.async {
+            self.recordings.append(rec)
+            self.tracks[trk].clips.append(clip)
         }
     }
 
-    func removeRecording(_ rec: Recording) {
-        recordings.removeAll { $0.id == rec.id }
-    }
+    func startPlayback() {
+        guard isMonitoring, !isPlaying else { return }
 
-    // MARK: - CoreAudio helpers
-
-    private func fallbackOutput(excluding badIDs: Set<AudioDeviceID>) -> AudioDeviceID? {
-        let candidates = outputDevices.filter { !badIDs.contains($0.id) }
-        for kw in ["built-in", "macbook", "imac", "headphone", "speaker", "display"] {
-            if let d = candidates.first(where: { $0.name.localizedCaseInsensitiveContains(kw) }) {
-                return d.id
-            }
-        }
-        return candidates.first?.id
-    }
-
-    private func enumerateDevices() -> [AudioDevice] {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices,
-                                              mScope: kAudioObjectPropertyScopeGlobal,
-                                              mElement: kAudioObjectPropertyElementMain)
-        let sys = AudioObjectID(kAudioObjectSystemObject)
-        var sz: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(sys, &addr, 0, nil, &sz) == noErr else { return [] }
-        var ids = [AudioDeviceID](repeating: 0, count: Int(sz) / MemoryLayout<AudioDeviceID>.size)
-        guard AudioObjectGetPropertyData(sys, &addr, 0, nil, &sz, &ids) == noErr else { return [] }
-        return ids.map { AudioDevice(id: $0, name: deviceName($0)) }
-    }
-
-    private func deviceName(_ id: AudioDeviceID) -> String {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioObjectPropertyName,
-                                              mScope: kAudioObjectPropertyScopeGlobal,
-                                              mElement: kAudioObjectPropertyElementMain)
-        var ref: Unmanaged<CFString>?
-        var sz = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &sz, &ref) == noErr,
-              let v = ref?.takeRetainedValue() else { return "Unknown" }
-        return v as String
-    }
-
-    private func channelCount(id: AudioDeviceID, input: Bool) -> Int {
-        let scope: AudioObjectPropertyScope = input
-            ? kAudioDevicePropertyScopeInput : kAudioDevicePropertyScopeOutput
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioDevicePropertyStreamConfiguration,
-                                              mScope: scope,
-                                              mElement: kAudioObjectPropertyElementMain)
-        var sz: UInt32 = 0
-        guard AudioObjectGetPropertyDataSize(id, &addr, 0, nil, &sz) == noErr, sz > 0 else { return 0 }
-        let raw = UnsafeMutableRawPointer.allocate(
-            byteCount: Int(sz), alignment: MemoryLayout<AudioBufferList>.alignment)
-        defer { raw.deallocate() }
-        guard AudioObjectGetPropertyData(id, &addr, 0, nil, &sz, raw) == noErr else { return 0 }
-        return UnsafeMutableAudioBufferListPointer(
-            raw.assumingMemoryBound(to: AudioBufferList.self))
-            .reduce(0) { $0 + Int($1.mNumberChannels) }
-    }
-
-    private func currentSystemOutputID() -> AudioDeviceID? {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-                                              mScope: kAudioObjectPropertyScopeGlobal,
-                                              mElement: kAudioObjectPropertyElementMain)
-        var id: AudioDeviceID = kAudioDeviceUnknown
-        var sz = UInt32(MemoryLayout<AudioDeviceID>.size)
-        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
-                                         &addr, 0, nil, &sz, &id) == noErr,
-              id != kAudioDeviceUnknown else { return nil }
-        return id
-    }
-
-    private func defaultOutputDeviceID() -> AudioDeviceID {
-        currentSystemOutputID() ?? AudioDeviceID(kAudioDeviceUnknown)
-    }
-
-    private func getDefaultInputID() -> AudioDeviceID {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
-                                              mScope: kAudioObjectPropertyScopeGlobal,
-                                              mElement: kAudioObjectPropertyElementMain)
-        var id: AudioDeviceID = 0
-        var sz = UInt32(MemoryLayout<AudioDeviceID>.size)
-        AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
-                                   &addr, 0, nil, &sz, &id)
-        return id
-    }
-
-    private func setDefaultInput(_ id: AudioDeviceID) {
-        var addr = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice,
-                                              mScope: kAudioObjectPropertyScopeGlobal,
-                                              mElement: kAudioObjectPropertyElementMain)
-        var dev = id
-        AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject),
-                                   &addr, 0, nil,
-                                   UInt32(MemoryLayout<AudioDeviceID>.size), &dev)
-    }
-}
-
-// ── WaveformView ─────────────────────────────────────────────────────────────
-
-struct WaveformView: View {
-    let samples: [Double]
-    let isActive: Bool
-    let isRecording: Bool
-
-    var body: some View {
-        Canvas { context, size in
-            let midY  = size.height * 0.5
-            let count = CGFloat(samples.count)
-            let barW  = size.width / count
-            let gap:  CGFloat = 1
-
-            // Center line at 50%
-            context.stroke(
-                Path { p in
-                    p.move(to: CGPoint(x: 0, y: midY))
-                    p.addLine(to: CGPoint(x: size.width, y: midY))
-                },
-                with: .color(Theme.line.opacity(0.6)),
-                lineWidth: 0.5)
-
-            // Draw bars
-            for (i, sample) in samples.enumerated() {
-                let h = midY * CGFloat(sample)
-                guard h > 0.5 else { continue }
-                let x = CGFloat(i) * barW
-                let w = max(barW - gap, 1)
-
-                // Recent bars (last 20%) use accent color, older bars use gray with fading opacity
-                let recentThreshold = Int(Double(samples.count) * 0.8)
-                let color: Color
-                let opacity: Double
-                if i >= recentThreshold {
-                    color = Theme.accent
-                    opacity = 0.5 + sample * 0.5
-                } else {
-                    color = Theme.waveGray
-                    let fadePos = Double(i) / Double(recentThreshold)
-                    opacity = (0.15 + fadePos * 0.45) * (0.3 + sample * 0.7)
+        for (i, track) in tracks.enumerated() where i < playerNodes.count {
+            let player = playerNodes[i]
+            player.stop()
+            for clip in track.clips {
+                if let file = try? AVAudioFile(forReading: clip.url) {
+                    player.scheduleFile(file, at: nil, completionHandler: nil)
                 }
-
-                // Upper half
-                context.fill(Path(CGRect(x: x, y: midY - h, width: w, height: h)),
-                             with: .color(color.opacity(opacity)))
-                // Lower half (mirror)
-                context.fill(Path(CGRect(x: x, y: midY, width: w, height: h)),
-                             with: .color(color.opacity(opacity)))
             }
+        }
 
-            // Playhead line at right edge
-            if isActive {
-                context.stroke(
-                    Path { p in
-                        p.move(to: CGPoint(x: size.width - 1, y: 0))
-                        p.addLine(to: CGPoint(x: size.width - 1, y: size.height))
-                    },
-                    with: .color(.white.opacity(0.8)),
-                    lineWidth: 1)
-            }
+        for (i, player) in playerNodes.enumerated() where i < tracks.count && !tracks[i].clips.isEmpty {
+            player.play()
+        }
 
-            // REC IN marker when recording
+        isPlaying = true
+        let count = tracks.reduce(0) { $0 + $1.clips.count }
+        status = count == 0 ? "Nothing to play" : "Playing multitrack"
+    }
+
+    func stopPlayback() {
+        playerNodes.forEach { $0.stop() }
+        isPlaying = false
+        status = "Playback stopped"
+    }
+
+    func toggleMute(_ i: Int) { tracks[i].muted.toggle(); refreshTrackMixers() }
+    func toggleSolo(_ i: Int) { tracks[i].solo.toggle(); refreshTrackMixers() }
+    func setTrackVolume(_ i: Int, _ v: Double) { tracks[i].volume = v; refreshTrackMixers() }
+
+    // ── Looper Methods ──────────────────────────────────────────────────────
+
+    func toggleTrackRecord(_ i: Int) {
+        if isRecording && selectedTrack == i {
+            stopRecording()
+            startTrackLoop(i)
+        } else {
             if isRecording {
-                let markerX = size.width - 60
-                context.fill(
-                    Path(CGRect(x: markerX, y: 4, width: 52, height: 16)),
-                    with: .color(Theme.danger.opacity(0.85)))
-                context.draw(
-                    Text("REC IN")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white),
-                    at: CGPoint(x: markerX + 26, y: 12))
+                let prevTrack = selectedTrack
+                stopRecording()
+                startTrackLoop(prevTrack)
+            }
+            selectedTrack = i
+            startRecording()
+        }
+    }
+
+    func toggleTrackPlayback(_ i: Int) {
+        if tracks[i].isPlaying {
+            stopTrackLoop(i)
+        } else {
+            startTrackLoop(i)
+        }
+    }
+
+    func startTrackLoop(_ i: Int) {
+        guard i < playerNodes.count, !tracks[i].clips.isEmpty else { return }
+        let player = playerNodes[i]
+        player.stop()
+
+        if let clip = tracks[i].clips.last,
+           let file = try? AVAudioFile(forReading: clip.url) {
+            let frameCount = AVAudioFrameCount(file.length)
+            if let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frameCount) {
+                try? file.read(into: buffer)
+                player.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
+                player.play()
+                tracks[i].isPlaying = true
             }
         }
-        .background(Theme.bg)
+    }
 
-        // Time labels below
-        HStack {
-            Text("\u{2212}40s")
-            Spacer()
-            Text("\u{2212}30s")
-            Spacer()
-            Text("\u{2212}20s")
-            Spacer()
-            Text("\u{2212}10s")
-            Spacer()
-            Text("now")
+    func stopTrackLoop(_ i: Int) {
+        guard i < playerNodes.count else { return }
+        playerNodes[i].stop()
+        tracks[i].isPlaying = false
+        tracks[i].loopProgress = 0
+    }
+
+    func clearTrack(_ i: Int) {
+        stopTrackLoop(i)
+        tracks[i].undoClips = tracks[i].clips.isEmpty ? nil : tracks[i].clips
+        tracks[i].clips = []
+    }
+
+    func undoTrack(_ i: Int) {
+        if let prev = tracks[i].undoClips {
+            stopTrackLoop(i)
+            tracks[i].clips = prev
+            tracks[i].undoClips = nil
         }
-        .font(.system(size: 9, design: .monospaced))
-        .foregroundStyle(Theme.textTertiary)
-        .padding(.horizontal, 4)
+    }
+
+    func playAll() {
+        for i in 0..<tracks.count where !tracks[i].clips.isEmpty {
+            startTrackLoop(i)
+        }
+        status = "Playing all"
+    }
+
+    func stopAll() {
+        for i in 0..<tracks.count { stopTrackLoop(i) }
+        if isRecording { stopRecording() }
+        isPlaying = false
+        status = "All stopped"
+    }
+
+    func clearAll() {
+        stopAll()
+        for i in 0..<tracks.count {
+            tracks[i].undoClips = tracks[i].clips.isEmpty ? nil : tracks[i].clips
+            tracks[i].clips = []
+        }
+        status = "All cleared"
+    }
+
+    func cycleQuantize() {
+        quantizeMode = (quantizeMode + 1) % 3
+    }
+
+    private func refreshTrackMixers() {
+        let anySolo = tracks.contains { $0.solo }
+        for i in 0..<tracks.count where i < trackMixers.count {
+            let t = tracks[i]
+            let audible = t.solo || (!anySolo && !t.muted)
+            trackMixers[i].outputVolume = audible ? Float(t.volume) : 0
+        }
+    }
+
+    private func trackFolder(_ index: Int) -> URL {
+        let dir = Self.tracksBaseURL.appendingPathComponent("Track \(index + 1)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func computePeaks(url: URL, count: Int) -> [Double] {
+        guard let file = try? AVAudioFile(forReading: url) else { return [] }
+        let frames = AVAudioFrameCount(file.length)
+        guard frames > 0,
+              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames)
+        else { return [] }
+        try? file.read(into: buffer)
+        guard let data = buffer.floatChannelData else { return [] }
+        let n = Int(buffer.frameLength)
+        let step = max(n / count, 1)
+        var result: [Double] = []
+        for i in 0..<count {
+            let start = i * step
+            let end = min(start + step, n)
+            var peak: Float = 0
+            for j in start..<end { peak = max(peak, abs(data[0][j])) }
+            result.append(Double(min(peak, 1)))
+        }
+        return result
     }
 }
 
-// ── HorizontalMeter ─────────────────────────────────────────────────────────
+// ── Views ────────────────────────────────────────────────────────────────────
 
-struct HorizontalMeter: View {
-    let label: String
-    let level: Double
-    let peak: Double
-    let isActive: Bool
+struct HeaderBar: View {
+    @ObservedObject var audio: AudioManager
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .center, spacing: 12) {
+            // Logo
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("OP-XY")
+                    .font(.system(size: 22, weight: .black, design: .default))
+                    .foregroundColor(Theme.textPrimary)
+                Rectangle()
+                    .fill(Theme.accent)
+                    .frame(width: 3, height: 16)
+                Text("LOOPER")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.textSecondary)
+                    .tracking(3)
+            }
+
+            Spacer()
+
+            // Tempo control
+            TempoControl(audio: audio)
+
+            // Time Signature
+            Text("4/4")
+                .font(.system(size: 12, weight: .black, design: .monospaced))
+                .foregroundColor(Theme.textSecondary)
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(Theme.surfaceInset)
+                .cornerRadius(4)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+
+            // Metronome
+            Button { audio.toggleMetronome() } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "metronome.fill")
+                        .font(.system(size: 10))
+                    Text(audio.metronomeEnabled ? "ON" : "OFF")
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                }
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(audio.metronomeEnabled ? Theme.accent : Theme.surfaceInset)
+                .foregroundColor(audio.metronomeEnabled ? .black : Theme.textTertiary)
+                .cornerRadius(4)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+            }.buttonStyle(.plain)
+
+            // Quantize
+            Button { audio.cycleQuantize() } label: {
+                HStack(spacing: 4) {
+                    Text("Q")
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                    Text(AudioManager.quantizeLabels[audio.quantizeMode])
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                }
+                .padding(.horizontal, 8).padding(.vertical, 6)
+                .background(audio.quantizeMode > 0 ? Theme.accent.opacity(0.2) : Theme.surfaceInset)
+                .foregroundColor(audio.quantizeMode > 0 ? Theme.accent : Theme.textTertiary)
+                .cornerRadius(4)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(audio.quantizeMode > 0 ? Theme.accent.opacity(0.4) : Theme.line))
+            }.buttonStyle(.plain)
+
+            // FX toggle
+            Button(action: { audio.showEffects.toggle() }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "slider.horizontal.3")
+                    Text("FX")
+                }
+                .font(.system(size: 10, weight: .black, design: .monospaced))
+                .tracking(1)
+                .padding(.horizontal, 10).padding(.vertical, 5)
+                .background(audio.showEffects ? Theme.accent : Theme.surfaceRaised)
+                .foregroundColor(audio.showEffects ? .black : Theme.textSecondary)
+                .cornerRadius(4)
+                .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+            }.buttonStyle(.plain)
+
+            // Status dot + format
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(audio.isMonitoring ? Theme.accent : Theme.textTertiary)
+                    .frame(width: 5, height: 5)
+                Text(audio.sampleRateString)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(Theme.textTertiary)
+            }
+        }
+        .padding(.leading, 78)
+        .padding(.trailing, 16)
+        .padding(.vertical, 8)
+        .background(Theme.bg)
+    }
+}
+
+struct SignalBar: View {
+    @ObservedObject var audio: AudioManager
+
+    var body: some View {
+        HStack {
+            HStack(spacing: 4) {
+                Text("IN")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.accent)
+                Picker("", selection: Binding(
+                    get: { audio.selectedInputID },
+                    set: { audio.selectedInputID = $0; audio.startMonitoring() }
+                )) {
+                    ForEach(audio.inputDevices) { dev in
+                        Text(dev.name).tag(Optional(dev.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+            }
+
+            Spacer()
+
+            HStack(spacing: 16) {
+                SignalNode(label: "I", active: audio.isMonitoring, color: Theme.accent)
+                SignalLine(active: audio.isMonitoring)
+                SignalNode(label: "E", active: audio.eqEnabled, color: Theme.eqColor)
+                SignalLine(active: audio.isMonitoring)
+                SignalNode(label: "R", active: audio.reverbEnabled, color: Theme.reverbColor)
+                SignalLine(active: audio.isMonitoring)
+                SignalNode(label: "D", active: audio.delayEnabled, color: Theme.delayColor)
+                SignalLine(active: audio.isMonitoring)
+                SignalNode(label: "O", active: audio.isMonitoring, color: Theme.accent)
+            }
+
+            Spacer()
+
+            HStack(spacing: 4) {
+                Picker("", selection: Binding(
+                    get: { audio.selectedOutputID },
+                    set: { if let id = $0 { audio.switchOutput(to: id) } }
+                )) {
+                    ForEach(audio.outputDevices) { dev in
+                        Text(dev.name).tag(Optional(dev.id))
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+
+                Text("OUT")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .foregroundColor(Theme.accent)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(Theme.surface)
+    }
+}
+
+struct SignalNode: View {
+    let label: String
+    let active: Bool
+    let color: Color
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Circle()
+                .fill(active ? color : Theme.surfaceInset)
+                .overlay(Circle().stroke(active ? color : Theme.bezel, lineWidth: 1.5))
+                .frame(width: 8, height: 8)
             Text(label)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundStyle(Theme.textTertiary)
-                .frame(width: 12, alignment: .trailing)
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundColor(active ? Theme.textPrimary : Theme.textTertiary)
+        }
+    }
+}
 
-            GeometryReader { g in
+struct SignalLine: View {
+    let active: Bool
+
+    var body: some View {
+        Rectangle()
+            .fill(active ? Theme.bezel : Theme.line)
+            .frame(width: 12, height: 1)
+    }
+}
+
+// ── Compact Meters ──────────────────────────────────────────────────────────
+
+struct CompactMeterBar: View {
+    @ObservedObject var audio: AudioManager
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text("L")
+                .font(.system(size: 8, weight: .black, design: .monospaced))
+                .foregroundColor(Theme.textTertiary)
+            GeometryReader { geo in
                 ZStack(alignment: .leading) {
-                    // Track background
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(Theme.surface)
+                    Rectangle().fill(Theme.surfaceInset)
+                    Rectangle()
+                        .fill(audio.levelL > 0.95 ? Theme.danger : Theme.accent)
+                        .frame(width: CGFloat(max(0, min(1, audio.levelL))) * geo.size.width)
+                    Rectangle().fill(Theme.textPrimary).frame(width: 1.5)
+                        .offset(x: max(0, CGFloat(audio.peakL) * geo.size.width - 1))
+                }
+            }
+            .frame(height: 6).cornerRadius(1)
 
-                    // Fill bar
-                    RoundedRectangle(cornerRadius: 2)
-                        .fill(isActive ? Theme.accent : Theme.waveGray.opacity(0.4))
-                        .frame(width: g.size.width * max(level, 0))
-                        .animation(.linear(duration: 0.03), value: level)
+            Text("R")
+                .font(.system(size: 8, weight: .black, design: .monospaced))
+                .foregroundColor(Theme.textTertiary)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Rectangle().fill(Theme.surfaceInset)
+                    Rectangle()
+                        .fill(audio.levelR > 0.95 ? Theme.danger : Theme.accent)
+                        .frame(width: CGFloat(max(0, min(1, audio.levelR))) * geo.size.width)
+                    Rectangle().fill(Theme.textPrimary).frame(width: 1.5)
+                        .offset(x: max(0, CGFloat(audio.peakR) * geo.size.width - 1))
+                }
+            }
+            .frame(height: 6).cornerRadius(1)
 
-                    // Peak indicator
-                    if peak > 0.01 {
-                        RoundedRectangle(cornerRadius: 1)
-                            .fill(peak > 0.85 ? Theme.danger : .white.opacity(0.9))
-                            .frame(width: 2, height: g.size.height)
-                            .offset(x: g.size.width * max(peak, 0) - 1)
-                            .animation(.linear(duration: 0.05), value: peak)
+            Text(audio.peakDB.isFinite ? String(format: "%+.1f", audio.peakDB) : "-∞")
+                .font(.system(size: 11, weight: .black, design: .monospaced))
+                .foregroundColor(audio.peakDB > -0.5 ? Theme.danger : Theme.textSecondary)
+                .frame(width: 50, alignment: .trailing)
+            Text("dB")
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .foregroundColor(Theme.textTertiary)
+        }
+        .padding(.horizontal, 16).padding(.vertical, 4)
+        .background(Theme.surface)
+    }
+}
+
+// ── Loop Grid ───────────────────────────────────────────────────────────────
+
+struct LoopGridView: View {
+    @ObservedObject var audio: AudioManager
+
+    var body: some View {
+        VStack(spacing: 2) {
+            // Grid header
+            HStack {
+                Text("LOOP GRID")
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .foregroundColor(Theme.textSecondary)
+                    .tracking(2)
+                Spacer()
+                let clipCount = audio.tracks.reduce(0) { $0 + $1.clips.count }
+                let activeCount = audio.tracks.filter { $0.isPlaying }.count
+                Text("\(clipCount) clips · \(activeCount) active")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(Theme.textTertiary)
+            }
+            .padding(.horizontal, 4).padding(.bottom, 4)
+
+            // Track pads
+            ForEach(0..<Theme.trackCount, id: \.self) { i in
+                LoopPadView(index: i, track: audio.tracks[i], audio: audio)
+            }
+        }
+        .padding(12)
+        .background(Theme.surface)
+        .cornerRadius(4)
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+        .padding(.horizontal, 16)
+        .padding(.top, 6)
+    }
+}
+
+struct LoopPadView: View {
+    let index: Int
+    let track: TrackInfo
+    @ObservedObject var audio: AudioManager
+
+    private var color: Color { Theme.trackColor(index) }
+    private var isRecordingThis: Bool { audio.isRecording && audio.selectedTrack == index }
+    private var hasClip: Bool { !track.clips.isEmpty }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Color bar + track number
+            Rectangle()
+                .fill(track.isPlaying ? color : color.opacity(0.3))
+                .frame(width: 4)
+
+            Button(action: { audio.selectedTrack = index }) {
+                Text(String(format: "%02d", index + 1))
+                    .font(.system(size: 12, weight: .black, design: .monospaced))
+                    .foregroundColor(audio.selectedTrack == index ? color : Theme.textSecondary)
+                    .frame(width: 30)
+            }
+            .buttonStyle(.plain)
+
+            // Waveform / Loop visualization
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    // Background
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Theme.surfaceInset)
+
+                    if hasClip, let clip = track.clips.last, !clip.peaks.isEmpty {
+                        // Waveform peaks
+                        HStack(spacing: 1) {
+                            ForEach(0..<clip.peaks.count, id: \.self) { j in
+                                let peak = clip.peaks[j]
+                                RoundedRectangle(cornerRadius: 0.5)
+                                    .fill(color.opacity(0.6))
+                                    .frame(width: max(1, (geo.size.width - CGFloat(clip.peaks.count)) / CGFloat(clip.peaks.count)),
+                                           height: max(2, CGFloat(peak) * (geo.size.height - 6)))
+                            }
+                        }
+                        .frame(maxHeight: .infinity)
+                        .padding(.horizontal, 2)
+
+                        // Loop progress playhead
+                        if track.isPlaying {
+                            Rectangle()
+                                .fill(Color.white)
+                                .frame(width: 1.5)
+                                .offset(x: CGFloat(track.loopProgress) * geo.size.width)
+                        }
+
+                        // Layer count badge
+                        if track.layerCount > 1 {
+                            Text("×\(track.layerCount)")
+                                .font(.system(size: 8, weight: .black, design: .monospaced))
+                                .foregroundColor(color)
+                                .padding(.horizontal, 4).padding(.vertical, 1)
+                                .background(Theme.bg.opacity(0.8))
+                                .cornerRadius(2)
+                                .padding(3)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                        }
+                    } else {
+                        // Empty state
+                        Text("EMPTY")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundColor(Theme.textTertiary.opacity(0.4))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+
+                    // Recording flash overlay
+                    if isRecordingThis {
+                        RoundedRectangle(cornerRadius: 3)
+                            .fill(Theme.danger.opacity(0.1))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 3)
+                                    .stroke(Theme.danger.opacity(0.4), lineWidth: 1)
+                            )
                     }
                 }
             }
-            .frame(height: 8)
+            .frame(height: 44)
+            .padding(.vertical, 4)
+
+            // Track action buttons
+            HStack(spacing: 4) {
+                // REC per track
+                Button { audio.toggleTrackRecord(index) } label: {
+                    Circle()
+                        .fill(isRecordingThis ? Theme.danger : Theme.textTertiary.opacity(0.3))
+                        .frame(width: 20, height: 20)
+                        .overlay(
+                            Circle().fill(isRecordingThis ? Theme.danger : Color.red.opacity(0.7))
+                                .frame(width: 10, height: 10)
+                        )
+                }.buttonStyle(.plain)
+
+                // PLAY/STOP per track
+                Button { audio.toggleTrackPlayback(index) } label: {
+                    Image(systemName: track.isPlaying ? "stop.fill" : "play.fill")
+                        .font(.system(size: 10, weight: .bold))
+                        .frame(width: 20, height: 20)
+                        .background(track.isPlaying ? color.opacity(0.2) : Theme.surfaceInset)
+                        .foregroundColor(track.isPlaying ? color : Theme.textTertiary)
+                        .cornerRadius(3)
+                }.buttonStyle(.plain)
+
+                // CLEAR
+                Button { audio.clearTrack(index) } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(width: 20, height: 20)
+                        .background(Theme.surfaceInset)
+                        .foregroundColor(hasClip ? Theme.textSecondary : Theme.textTertiary.opacity(0.3))
+                        .cornerRadius(3)
+                }
+                .buttonStyle(.plain)
+                .disabled(!hasClip)
+            }
+            .padding(.horizontal, 6)
+
+            // M / S
+            HStack(spacing: 2) {
+                Button { audio.toggleMute(index) } label: {
+                    Text("M")
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .frame(width: 18, height: 18)
+                        .background(track.muted ? Theme.danger : Theme.surfaceInset)
+                        .foregroundColor(track.muted ? Theme.bg : Theme.textTertiary)
+                        .cornerRadius(2)
+                }.buttonStyle(.plain)
+
+                Button { audio.toggleSolo(index) } label: {
+                    Text("S")
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .frame(width: 18, height: 18)
+                        .background(track.solo ? Theme.eqColor : Theme.surfaceInset)
+                        .foregroundColor(track.solo ? Theme.bg : Theme.textTertiary)
+                        .cornerRadius(2)
+                }.buttonStyle(.plain)
+            }
+
+            // Volume fader
+            TrackFader(
+                value: Binding(
+                    get: { track.volume },
+                    set: { audio.setTrackVolume(index, $0) }
+                ),
+                color: color
+            )
+            .frame(width: 80)
+            .padding(.horizontal, 6)
+
+            Text("\(Int(track.volume * 100))")
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(Theme.textTertiary)
+                .frame(width: 24, alignment: .trailing)
         }
+        .padding(.horizontal, 4).padding(.vertical, 2)
+        .background(
+            RoundedRectangle(cornerRadius: 4)
+                .fill(audio.selectedTrack == index ? Theme.surfaceInset.opacity(0.5) : Color.clear)
+        )
     }
 }
 
-// ── KnobView ────────────────────────────────────────────────────────────────
-
-struct KnobView: View {
-    let value: Double       // 0...1 normalized
-    let bipolar: Bool       // if true, center is zero (e.g. EQ)
+struct TrackFader: View {
+    @Binding var value: Double
     let color: Color
-    let label: String
-    let displayValue: String
-
-    private let startAngle: Double = 135  // degrees
-    private let sweepAngle: Double = 270  // degrees
-    private let size: CGFloat = 64
 
     var body: some View {
-        VStack(spacing: 4) {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Theme.surfaceInset)
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(color.opacity(0.5))
+                    .frame(width: CGFloat(value) * geo.size.width)
+                // Thumb
+                RoundedRectangle(cornerRadius: 1)
+                    .fill(color)
+                    .frame(width: 4, height: geo.size.height)
+                    .offset(x: max(0, CGFloat(value) * geo.size.width - 2))
+            }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        value = min(max(Double(g.location.x / geo.size.width), 0), 1)
+                    }
+            )
+        }
+        .frame(height: 12)
+        .cornerRadius(2)
+    }
+}
+
+// ── Mini Scope ──────────────────────────────────────────────────────────────
+
+struct MiniScopeView: View {
+    @ObservedObject var audio: AudioManager
+
+    var body: some View {
+        GeometryReader { geo in
             ZStack {
-                // Gray track arc
-                arcPath(from: 0, to: 1)
-                    .stroke(Theme.line, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-
-                // Colored value arc
-                if bipolar {
-                    arcPath(from: 0.5, to: value)
-                        .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
-                } else {
-                    arcPath(from: 0, to: value)
-                        .stroke(color, style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                Path { path in
+                    let midY = geo.size.height / 2
+                    let stepX = geo.size.width / CGFloat(audio.waveformSamples.count - 1)
+                    for (i, val) in audio.waveformSamples.enumerated() {
+                        let x = CGFloat(i) * stepX
+                        let y = midY - CGFloat(val) * (geo.size.height / 2.2)
+                        if i == 0 { path.move(to: CGPoint(x: x, y: y)) }
+                        else { path.addLine(to: CGPoint(x: x, y: y)) }
+                    }
                 }
+                .stroke(Theme.accent.opacity(0.5), lineWidth: 1)
+            }
+        }
+        .frame(height: 32)
+        .background(Theme.surfaceInset)
+        .cornerRadius(3)
+        .overlay(RoundedRectangle(cornerRadius: 3).stroke(Theme.line, lineWidth: 0.5))
+        .padding(.horizontal, 16)
+        .padding(.top, 4)
+    }
+}
 
-                // Center circle
-                Circle()
-                    .fill(Theme.surface)
-                    .frame(width: size * 0.4, height: size * 0.4)
+struct TempoControl: View {
+    @ObservedObject var audio: AudioManager
+    @State private var dragStartBPM: Double? = nil
 
-                // White indicator line
+    var body: some View {
+        HStack(spacing: 4) {
+            Button { audio.setBPM(audio.bpm - 10) } label: {
+                Text("−10")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .frame(width: 26, height: 26)
+                    .background(Theme.surfaceRaised)
+                    .foregroundColor(Theme.textSecondary)
+                    .cornerRadius(3)
+            }.buttonStyle(.plain)
+
+            Button { audio.setBPM(audio.bpm - 1) } label: {
+                Text("−")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(width: 22, height: 26)
+                    .background(Theme.surfaceRaised)
+                    .foregroundColor(Theme.textSecondary)
+                    .cornerRadius(3)
+            }.buttonStyle(.plain)
+
+            // BPM display — drag vertically to scrub
+            VStack(spacing: 0) {
+                Text("BPM")
+                    .font(.system(size: 7, weight: .black, design: .monospaced))
+                    .foregroundColor(Theme.textTertiary)
+                Text(String(format: "%.0f", audio.bpm))
+                    .font(.system(size: 18, weight: .black, design: .monospaced))
+                    .foregroundColor(Theme.accent)
+            }
+            .frame(width: 48)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { g in
+                        if dragStartBPM == nil { dragStartBPM = audio.bpm }
+                        let delta = -g.translation.height / 3
+                        audio.setBPM((dragStartBPM ?? audio.bpm) + delta)
+                    }
+                    .onEnded { _ in dragStartBPM = nil }
+            )
+
+            Button { audio.setBPM(audio.bpm + 1) } label: {
+                Text("+")
+                    .font(.system(size: 14, weight: .bold))
+                    .frame(width: 22, height: 26)
+                    .background(Theme.surfaceRaised)
+                    .foregroundColor(Theme.textSecondary)
+                    .cornerRadius(3)
+            }.buttonStyle(.plain)
+
+            Button { audio.setBPM(audio.bpm + 10) } label: {
+                Text("+10")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .frame(width: 26, height: 26)
+                    .background(Theme.surfaceRaised)
+                    .foregroundColor(Theme.textSecondary)
+                    .cornerRadius(3)
+            }.buttonStyle(.plain)
+        }
+        .padding(.horizontal, 6).padding(.vertical, 4)
+        .background(Theme.surfaceInset)
+        .cornerRadius(4)
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+    }
+}
+
+struct DrawerEffectsView: View {
+    @ObservedObject var audio: AudioManager
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 0) {
+            // EQ
+            VStack(spacing: 8) {
+                fxToggle(label: "EQ", color: Theme.eqColor, enabled: $audio.eqEnabled, action: audio.applyEQ)
+                HStack(spacing: 12) {
+                    ArcKnob(label: "LOW", value: $audio.eqLow, range: -12...12, color: Theme.eqColor, bipolar: true)
+                        .onChange(of: audio.eqLow) { audio.applyEQ() }
+                    ArcKnob(label: "MID", value: $audio.eqMid, range: -12...12, color: Theme.eqColor, bipolar: true)
+                        .onChange(of: audio.eqMid) { audio.applyEQ() }
+                    ArcKnob(label: "HI", value: $audio.eqHigh, range: -12...12, color: Theme.eqColor, bipolar: true)
+                        .onChange(of: audio.eqHigh) { audio.applyEQ() }
+                }
+                .opacity(audio.eqEnabled ? 1 : 0.3)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(12)
+
+            Rectangle().fill(Theme.line).frame(width: 0.5)
+
+            // Reverb
+            VStack(spacing: 8) {
+                fxToggle(label: "REVERB", color: Theme.reverbColor, enabled: $audio.reverbEnabled, action: audio.applyReverb)
+                ArcKnob(label: "MIX", value: $audio.reverbMix, range: 0...100, color: Theme.reverbColor)
+                    .onChange(of: audio.reverbMix) { audio.applyReverb() }
+                    .opacity(audio.reverbEnabled ? 1 : 0.3)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(12)
+
+            Rectangle().fill(Theme.line).frame(width: 0.5)
+
+            // Delay
+            VStack(spacing: 8) {
+                fxToggle(label: "DELAY", color: Theme.delayColor, enabled: $audio.delayEnabled, action: audio.applyDelay)
+                HStack(spacing: 12) {
+                    ArcKnob(label: "TIME", value: $audio.delayTime, range: 0.05...1.0, color: Theme.delayColor)
+                        .onChange(of: audio.delayTime) { audio.applyDelay() }
+                    ArcKnob(label: "FB", value: $audio.delayFeedback, range: 0...90, color: Theme.delayColor)
+                        .onChange(of: audio.delayFeedback) { audio.applyDelay() }
+                    ArcKnob(label: "MIX", value: $audio.delayMix, range: 0...100, color: Theme.delayColor)
+                        .onChange(of: audio.delayMix) { audio.applyDelay() }
+                }
+                .opacity(audio.delayEnabled ? 1 : 0.3)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(12)
+        }
+        .background(Theme.surface)
+        .cornerRadius(4)
+        .overlay(RoundedRectangle(cornerRadius: 4).stroke(Theme.line))
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+    }
+
+    private func fxToggle(label: String, color: Color, enabled: Binding<Bool>, action: @escaping () -> Void) -> some View {
+        Button { enabled.wrappedValue.toggle(); action() } label: {
+            HStack(spacing: 6) {
+                Rectangle()
+                    .fill(enabled.wrappedValue ? color : Theme.textTertiary)
+                    .frame(width: 3, height: 14)
+                    .cornerRadius(1)
+                Text(label)
+                    .font(.system(size: 10, weight: .black, design: .monospaced))
+                    .foregroundColor(enabled.wrappedValue ? color : Theme.textTertiary)
+                    .tracking(1)
+                Spacer()
+                Text(enabled.wrappedValue ? "ON" : "OFF")
+                    .font(.system(size: 8, weight: .black, design: .monospaced))
+                    .foregroundColor(enabled.wrappedValue ? color : Theme.textTertiary)
+                    .tracking(1)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+struct ArcKnob: View {
+    let label: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let color: Color
+    var bipolar: Bool = false
+
+    private let startAngle: Double = 135
+    private let sweepAngle: Double = 270
+    private let size: CGFloat = 48
+
+    private var normalized: Double {
+        (value - range.lowerBound) / (range.upperBound - range.lowerBound)
+    }
+
+    var body: some View {
+        VStack(spacing: 3) {
+            ZStack {
+                arcPath(from: 0, to: 1)
+                    .stroke(Theme.line, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                if bipolar {
+                    arcPath(from: 0.5, to: normalized)
+                        .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                } else {
+                    arcPath(from: 0, to: normalized)
+                        .stroke(color, style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                }
+                Circle().fill(Theme.surface).frame(width: size * 0.38, height: size * 0.38)
                 indicatorLine()
                     .stroke(Color.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
             }
             .frame(width: size, height: size)
-
-            Text(displayValue)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundStyle(Theme.textPrimary)
-
-            Text(label)
-                .font(.system(size: 9, design: .default))
-                .foregroundStyle(Theme.textTertiary)
-        }
-    }
-
-    private func angleForValue(_ v: Double) -> Double {
-        let clamped = min(max(v, 0), 1)
-        return (startAngle + sweepAngle * clamped) * .pi / 180
-    }
-
-    private func arcPath(from: Double, to: Double) -> Path {
-        let radius = size / 2 - 4
-        let center = CGPoint(x: size / 2, y: size / 2)
-        let s = min(from, to)
-        let e = max(from, to)
-        let sAngle = Angle(degrees: startAngle + sweepAngle * s)
-        let eAngle = Angle(degrees: startAngle + sweepAngle * e)
-        return Path { p in
-            p.addArc(center: center, radius: radius,
-                     startAngle: sAngle, endAngle: eAngle, clockwise: false)
-        }
-    }
-
-    private func indicatorLine() -> Path {
-        let angle = angleForValue(value)
-        let center = CGPoint(x: size / 2, y: size / 2)
-        let innerR = size * 0.2
-        let outerR = size / 2 - 4
-        return Path { p in
-            p.move(to: CGPoint(x: center.x + innerR * cos(angle),
-                               y: center.y + innerR * sin(angle)))
-            p.addLine(to: CGPoint(x: center.x + outerR * cos(angle),
-                                  y: center.y + outerR * sin(angle)))
-        }
-    }
-}
-
-// ── ContentView ──────────────────────────────────────────────────────────────
-
-struct ContentView: View {
-    @EnvironmentObject var audio: AudioManager
-    @State private var recBlink = false
-    @State private var selectedEffect: String = "reverb"
-
-    private var inputName: String {
-        audio.inputDevices.first(where: { $0.id == audio.selectedInputID })?.name ?? "No Input"
-    }
-    private var outputName: String {
-        audio.outputDevices.first(where: { $0.id == audio.selectedOutputID })?.name ?? "No Output"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-
-            // ── Header Row ──────────────────────────────────────
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("OP-XY")
-                        .font(.system(size: 18, weight: .bold, design: .default))
-                        .foregroundStyle(Theme.textPrimary)
-                    Text("Monitor")
-                        .font(.system(size: 13, design: .default))
-                        .foregroundStyle(Theme.textSecondary)
-                }
-                Spacer()
-                HStack(spacing: 10) {
-                    Text("48 kHz / 24-bit / 2 ch")
-                        .font(.system(size: 10, design: .monospaced))
-                        .foregroundStyle(Theme.textSecondary)
-                        .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Theme.surface)
-                        .clipShape(Capsule())
-                    Button { audio.loadDevices() } label: {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundStyle(Theme.textSecondary)
-                            .frame(width: 28, height: 28)
-                            .background(Theme.surface)
-                            .clipShape(Circle())
-                    }
-                    .buttonStyle(.plain)
-                    .help("Rescan audio devices")
-                }
-            }
-            .padding(.horizontal, 24).padding(.top, 12).padding(.bottom, 8)
-
-            // ── Source Row ──────────────────────────────────────
-            HStack(spacing: 0) {
-                // Live/Rec status
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(audio.isRecording ? Theme.danger :
-                              (audio.isMonitoring ? Theme.accent : Theme.textTertiary))
-                        .frame(width: 6, height: 6)
-
-                    HStack(spacing: 2) {
-                        Text("Live")
-                            .foregroundStyle(audio.isMonitoring && !audio.isRecording
-                                             ? Theme.textPrimary : Theme.textTertiary)
-                        Text("/")
-                            .foregroundStyle(Theme.textTertiary)
-                        Text("Rec")
-                            .foregroundStyle(audio.isRecording
-                                             ? Theme.danger : Theme.textTertiary)
-                    }
-                    .font(.system(size: 11, weight: .medium, design: .default))
-                }
-
-                Text("  \u{2192}  ")
-                    .foregroundStyle(Theme.textTertiary)
-                    .font(.system(size: 11, design: .default))
-
-                // Input device (clickable)
-                Menu {
-                    ForEach(audio.inputDevices) { d in
-                        Button(d.name) { audio.selectedInputID = d.id }
-                    }
-                } label: {
-                    Text(inputName)
-                        .font(.system(size: 11, weight: .medium, design: .default))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                }
-                .menuStyle(.borderlessButton).fixedSize()
-                .disabled(audio.isMonitoring)
-                .opacity(audio.isMonitoring ? 0.7 : 1)
-
-                Text("  \u{203A}  ")
-                    .foregroundStyle(Theme.textTertiary)
-                    .font(.system(size: 11, design: .default))
-
-                // Output device (clickable)
-                Menu {
-                    ForEach(audio.outputDevices) { d in
-                        Button(d.name) { if audio.isMonitoring { audio.switchOutput(to: d.id) } else { audio.selectedOutputID = d.id } }
-                    }
-                } label: {
-                    Text(outputName)
-                        .font(.system(size: 11, weight: .medium, design: .default))
-                        .foregroundStyle(Theme.textPrimary)
-                        .lineLimit(1)
-                }
-                .menuStyle(.borderlessButton).fixedSize()
-
-                Spacer()
-
-                // Signal chain
-                HStack(spacing: 4) {
-                    Text("In")
-                        .foregroundStyle(Theme.textTertiary)
-                    effectDot(enabled: audio.eqEnabled, color: Theme.eqColor)
-                    Text("EQ")
-                        .foregroundStyle(Theme.textTertiary)
-                    effectDot(enabled: audio.reverbEnabled, color: Theme.reverbColor)
-                    Text("Rev")
-                        .foregroundStyle(Theme.textTertiary)
-                    effectDot(enabled: audio.delayEnabled, color: Theme.delayColor)
-                    Text("Dly")
-                        .foregroundStyle(Theme.textTertiary)
-                    Text("\u{2192}")
-                        .foregroundStyle(Theme.textTertiary)
-                    Text("Out")
-                        .foregroundStyle(Theme.textTertiary)
-                }
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-            }
-            .padding(.horizontal, 24).padding(.vertical, 6)
-            .background(Theme.surface.opacity(0.3))
-
-            // ── Waveform ────────────────────────────────────────
-            VStack(spacing: 2) {
-                WaveformView(samples: audio.waveformSamples,
-                             isActive: audio.isMonitoring,
-                             isRecording: audio.isRecording)
-                    .frame(height: 120)
-                    .padding(.horizontal, 24)
-            }
-            .padding(.top, 4)
-
-            // ── Meters ──────────────────────────────────────────
-            HStack(spacing: 16) {
-                VStack(spacing: 4) {
-                    HorizontalMeter(label: "L", level: audio.levelL, peak: audio.peakL,
-                                    isActive: audio.isMonitoring)
-                    HorizontalMeter(label: "R", level: audio.levelR, peak: audio.peakR,
-                                    isActive: audio.isMonitoring)
-
-                    // dB scale
-                    HStack(spacing: 0) {
-                        Text(" ")
-                            .frame(width: 20) // align with label
-                        HStack {
-                            Text("-60")
-                            Spacer()
-                            Text("-36")
-                            Spacer()
-                            Text("-24")
-                            Spacer()
-                            Text("-12")
-                            Spacer()
-                            Text("-6")
-                            Spacer()
-                            Text("0 dB")
-                        }
-                        .font(.system(size: 8, design: .monospaced))
-                        .foregroundStyle(Theme.textTertiary)
-                    }
-                }
-
-                // Peak readout
-                VStack(spacing: 2) {
-                    Text("PEAK")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Theme.textTertiary)
-                    Text(audio.peakDB > -100
-                         ? String(format: "%.1f", audio.peakDB)
-                         : "-\u{221E}")
-                        .font(.system(size: 22, weight: .medium, design: .monospaced))
-                        .foregroundStyle(audio.peakDB > -6 ? Theme.danger : Theme.textPrimary)
-                    Text("dB")
-                        .font(.system(size: 9, design: .monospaced))
-                        .foregroundStyle(Theme.textTertiary)
-                }
-                .frame(width: 70)
-            }
-            .padding(.horizontal, 24).padding(.vertical, 6)
-
-            // ── Controls Section ────────────────────────────────
-            thinDivider()
-
-            HStack(alignment: .top, spacing: 0) {
-                // Left column: Routing
-                VStack(alignment: .leading, spacing: 10) {
-                    routingRow(label: "Input") {
-                        Menu {
-                            ForEach(audio.inputDevices) { d in
-                                Button(d.name) { audio.selectedInputID = d.id }
-                            }
-                        } label: {
-                            Text(inputName)
-                                .font(.system(size: 11, design: .default))
-                                .foregroundStyle(Theme.textPrimary)
-                                .lineLimit(1)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(Theme.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                        .menuStyle(.borderlessButton).fixedSize()
-                        .disabled(audio.isMonitoring)
-                    }
-
-                    routingRow(label: "Output") {
-                        Menu {
-                            ForEach(audio.outputDevices) { d in
-                                Button(d.name) { if audio.isMonitoring { audio.switchOutput(to: d.id) } else { audio.selectedOutputID = d.id } }
-                            }
-                        } label: {
-                            Text(outputName)
-                                .font(.system(size: 11, design: .default))
-                                .foregroundStyle(Theme.textPrimary)
-                                .lineLimit(1)
-                                .padding(.horizontal, 8).padding(.vertical, 4)
-                                .background(Theme.surface)
-                                .clipShape(RoundedRectangle(cornerRadius: 4))
-                        }
-                        .menuStyle(.borderlessButton).fixedSize()
-                    }
-
-                    routingRow(label: "Volume") {
-                        HStack(spacing: 4) {
-                            Button { audio.applyVolume(max(audio.volume - 0.05, 0)) } label: {
-                                Text("\u{2212}")
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Theme.textSecondary)
-                                    .frame(width: 22, height: 22)
-                                    .background(Theme.surface)
-                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                            }
-                            .buttonStyle(.plain)
-
-                            // Small volume bar
-                            GeometryReader { g in
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Theme.surface)
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .fill(Theme.accent)
-                                        .frame(width: g.size.width * audio.volume)
-                                }
-                            }
-                            .frame(width: 60, height: 6)
-
-                            Button { audio.applyVolume(min(audio.volume + 0.05, 1)) } label: {
-                                Text("+")
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                    .foregroundStyle(Theme.textSecondary)
-                                    .frame(width: 22, height: 22)
-                                    .background(Theme.surface)
-                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                            }
-                            .buttonStyle(.plain)
-
-                            Text("\(Int(audio.volume * 100))%")
-                                .font(.system(size: 10, design: .monospaced))
-                                .foregroundStyle(Theme.textSecondary)
-                        }
-                    }
-
-                    routingRow(label: "Save to") {
-                        Text("~/Desktop")
-                            .font(.system(size: 11, design: .monospaced))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-
-                // Vertical divider
-                Rectangle().fill(Theme.line).frame(width: 0.5)
-
-                // Middle column: Effects list
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("EFFECTS")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(Theme.textTertiary)
-                        .tracking(1.5)
-
-                    effectButton(name: "EQ", color: Theme.eqColor,
-                                 enabled: audio.eqEnabled, key: "eq")
-                    effectButton(name: "Reverb", color: Theme.reverbColor,
-                                 enabled: audio.reverbEnabled, key: "reverb")
-                    effectButton(name: "Delay", color: Theme.delayColor,
-                                 enabled: audio.delayEnabled, key: "delay")
-                }
-                .frame(width: 140)
-                .padding(16)
-
-                // Vertical divider
-                Rectangle().fill(Theme.line).frame(width: 0.5)
-
-                // Right column: Effect params
-                VStack(alignment: .leading, spacing: 12) {
-                    if selectedEffect == "eq" {
-                        eqParamsView()
-                    } else if selectedEffect == "reverb" {
-                        reverbParamsView()
-                    } else {
-                        delayParamsView()
-                    }
-                }
-                .frame(maxWidth: .infinity)
-                .padding(16)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-
-            thinDivider()
-
-            // ── Transport + Recordings ──────────────────────────
-            HStack(alignment: .top, spacing: 0) {
-                // Left: Timer and controls
-                VStack(alignment: .leading, spacing: 8) {
-                    // Timer
-                    Text(formatTimerDuration(audio.recordingDuration))
-                        .font(.system(size: 44, weight: .light, design: .monospaced))
-                        .foregroundStyle(Theme.textPrimary)
-
-                    // Status label
-                    HStack(spacing: 5) {
-                        if audio.isRecording {
-                            Circle().fill(Theme.danger)
-                                .frame(width: 6, height: 6)
-                                .opacity(recBlink ? 1 : 0.3)
-                            Text("REC")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Theme.danger)
-                        } else if audio.isMonitoring {
-                            Text("READY")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Theme.accent)
-                        } else {
-                            Text("IDLE")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(Theme.textTertiary)
-                        }
-                    }
-
-                    Spacer().frame(height: 4)
-
-                    // Transport buttons
-                    HStack(spacing: 8) {
-                        Button {
-                            audio.isMonitoring
-                                ? audio.stopMonitoring()
-                                : audio.startMonitoring()
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: audio.isMonitoring
-                                      ? "stop.fill" : "waveform")
-                                    .font(.system(size: 11))
-                                Text(audio.isMonitoring ? "Stop" : "Monitor")
-                                    .font(.system(size: 12, weight: .semibold, design: .default))
-                            }
-                            .frame(width: 120)
-                            .padding(.vertical, 8)
-                            .background(audio.isMonitoring ? Theme.surface : Theme.accent)
-                            .foregroundStyle(audio.isMonitoring ? Theme.textPrimary : .white)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                        }
-                        .buttonStyle(.plain)
-
-                        Button {
-                            audio.isRecording
-                                ? audio.stopRecording()
-                                : audio.startRecording()
-                        } label: {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(audio.isRecording ? Theme.danger : Theme.danger.opacity(0.6))
-                                    .frame(width: 8, height: 8)
-                                Text(audio.isRecording ? "Stop Rec" : "Record")
-                                    .font(.system(size: 12, weight: .semibold, design: .default))
-                            }
-                            .frame(width: 120)
-                            .padding(.vertical, 8)
-                            .background(audio.isRecording ? Theme.danger.opacity(0.2) : .clear)
-                            .foregroundStyle(audio.isMonitoring
-                                             ? (audio.isRecording ? Theme.danger : Theme.textPrimary)
-                                             : Theme.textTertiary)
-                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                            .overlay(RoundedRectangle(cornerRadius: 6)
-                                .stroke(audio.isRecording ? Theme.danger : Theme.line))
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!audio.isMonitoring)
-                        .opacity(audio.isMonitoring ? 1 : 0.5)
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-
-                // Vertical divider
-                Rectangle().fill(Theme.line).frame(width: 0.5)
-
-                // Right: Recordings list
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack {
-                        Text("RECORDINGS / \(String(format: "%02d", audio.recordings.count))")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundStyle(Theme.textTertiary)
-                            .tracking(1.5)
-                        Spacer()
-                        Text("WAV \u{00B7} 48 kHz")
-                            .font(.system(size: 9, design: .monospaced))
-                            .foregroundStyle(Theme.textTertiary)
-                    }
-
-                    if audio.recordings.isEmpty {
-                        Text("No recordings yet")
-                            .font(.system(size: 11, design: .default))
-                            .foregroundStyle(Theme.textTertiary)
-                            .padding(.top, 8)
-                    } else {
-                        ScrollView {
-                            VStack(spacing: 4) {
-                                ForEach(audio.recordings) { rec in
-                                    HStack(spacing: 8) {
-                                        Circle()
-                                            .fill(Theme.accent)
-                                            .frame(width: 5, height: 5)
-                                        Text(rec.name)
-                                            .font(.system(size: 11, design: .default))
-                                            .foregroundStyle(Theme.textPrimary)
-                                            .lineLimit(1).truncationMode(.middle)
-                                        Spacer()
-                                        Text(rec.durationString)
-                                            .font(.system(size: 10, design: .monospaced))
-                                            .foregroundStyle(Theme.textSecondary)
-                                        Button {
-                                            NSWorkspace.shared.selectFile(
-                                                rec.url.path,
-                                                inFileViewerRootedAtPath: "")
-                                        } label: {
-                                            Image(systemName: "folder")
-                                                .font(.system(size: 10))
-                                                .foregroundStyle(Theme.textSecondary)
-                                        }
-                                        .buttonStyle(.plain)
-                                        Button { audio.removeRecording(rec) } label: {
-                                            Image(systemName: "xmark")
-                                                .font(.system(size: 9, weight: .medium))
-                                                .foregroundStyle(Theme.textTertiary)
-                                        }
-                                        .buttonStyle(.plain)
-                                    }
-                                    .padding(.horizontal, 8).padding(.vertical, 6)
-                                    .background(Theme.surface.opacity(0.3))
-                                    .clipShape(RoundedRectangle(cornerRadius: 4))
-                                    .overlay(RoundedRectangle(cornerRadius: 4)
-                                        .stroke(Theme.line.opacity(0.5)))
-                                }
-                            }
-                        }
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
-            }
-            .fixedSize(horizontal: false, vertical: true)
-
-            // ── Status Footer ───────────────────────────────────
-            thinDivider()
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(audio.isRecording ? Theme.danger :
-                          (audio.isMonitoring ? Theme.accent : Theme.textTertiary.opacity(0.4)))
-                    .frame(width: 6, height: 6)
-                Text(audio.status)
-                    .font(.system(size: 10, design: .default))
-                    .foregroundStyle(Theme.textSecondary)
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer()
-                Text("In \u{2192} EQ \u{2192} Reverb \u{2192} Delay \u{2192} Out")
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(Theme.textTertiary)
-            }
-            .padding(.horizontal, 24).padding(.vertical, 10)
-        }
-        .background(Theme.bg)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                recBlink = true
-            }
-        }
-    }
-
-    // MARK: - Helper Views
-
-    private func thinDivider() -> some View {
-        Rectangle().fill(Theme.line).frame(height: 0.5)
-    }
-
-    private func effectDot(enabled: Bool, color: Color) -> some View {
-        ZStack {
-            if enabled {
-                Circle().fill(color).frame(width: 6, height: 6)
-            } else {
-                Circle().stroke(color.opacity(0.5), lineWidth: 1).frame(width: 6, height: 6)
-            }
-        }
-    }
-
-    private func routingRow<Content: View>(label: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack(spacing: 8) {
-            Text(label)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundStyle(Theme.textTertiary)
-                .frame(width: 50, alignment: .trailing)
-            content()
-        }
-    }
-
-    private func effectButton(name: String, color: Color, enabled: Bool, key: String) -> some View {
-        Button {
-            selectedEffect = key
-        } label: {
-            HStack(spacing: 8) {
-                ZStack {
-                    if enabled {
-                        Circle().fill(color).frame(width: 8, height: 8)
-                    } else {
-                        Circle().stroke(color.opacity(0.5), lineWidth: 1).frame(width: 8, height: 8)
-                    }
-                }
-                Text(name)
-                    .font(.system(size: 12, weight: .medium, design: .default))
-                    .foregroundStyle(selectedEffect == key ? Theme.textPrimary : Theme.textSecondary)
-                Spacer()
-            }
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(selectedEffect == key ? Theme.surface : .clear)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Effect Parameter Views
-
-    @ViewBuilder
-    private func eqParamsView() -> some View {
-        HStack(spacing: 20) {
-            knobWithDrag(label: "Low", value: audio.eqLow, range: -12...12,
-                         bipolar: true, color: Theme.eqColor,
-                         display: { ($0 >= 0 ? "+" : "") + "\(Int($0)) dB" },
-                         setter: { audio.eqLow = $0; audio.applyEQ() })
-
-            knobWithDrag(label: "Mid", value: audio.eqMid, range: -12...12,
-                         bipolar: true, color: Theme.eqColor,
-                         display: { ($0 >= 0 ? "+" : "") + "\(Int($0)) dB" },
-                         setter: { audio.eqMid = $0; audio.applyEQ() })
-
-            knobWithDrag(label: "High", value: audio.eqHigh, range: -12...12,
-                         bipolar: true, color: Theme.eqColor,
-                         display: { ($0 >= 0 ? "+" : "") + "\(Int($0)) dB" },
-                         setter: { audio.eqHigh = $0; audio.applyEQ() })
-        }
-        .opacity(audio.eqEnabled ? 1 : 0.35)
-        .frame(maxWidth: .infinity)
-
-        effectToggle(name: "EQ", subtitle: "200 Hz \u{00B7} 1 kHz \u{00B7} 8 kHz",
-                     color: Theme.eqColor,
-                     enabled: Binding(get: { audio.eqEnabled },
-                                      set: { audio.eqEnabled = $0; audio.applyEQ() }))
-    }
-
-    @ViewBuilder
-    private func reverbParamsView() -> some View {
-        HStack(spacing: 16) {
-            // Preset selector
-            VStack(spacing: 4) {
-                HStack(spacing: 6) {
-                    Button {
-                        let idx = reverbPresets.firstIndex(where: { $0.preset.rawValue == audio.reverbPreset.rawValue }) ?? 0
-                        let prev = (idx - 1 + reverbPresets.count) % reverbPresets.count
-                        audio.changeReverbPreset(reverbPresets[prev].preset)
-                    } label: {
-                        Text("\u{2039}")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-
-                    Text(reverbLabel(audio.reverbPreset))
-                        .font(.system(size: 11, weight: .medium, design: .default))
-                        .foregroundStyle(Theme.textPrimary)
-                        .frame(width: 90)
-
-                    Button {
-                        let idx = reverbPresets.firstIndex(where: { $0.preset.rawValue == audio.reverbPreset.rawValue }) ?? 0
-                        let next = (idx + 1) % reverbPresets.count
-                        audio.changeReverbPreset(reverbPresets[next].preset)
-                    } label: {
-                        Text("\u{203A}")
-                            .font(.system(size: 16, weight: .medium))
-                            .foregroundStyle(Theme.textSecondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                Text("Preset")
-                    .font(.system(size: 9, design: .default))
-                    .foregroundStyle(Theme.textTertiary)
-            }
-
-            knobWithDrag(label: "Wet", value: audio.reverbMix, range: 0...100,
-                         bipolar: false, color: Theme.reverbColor,
-                         display: { "\(Int($0))%" },
-                         setter: { audio.reverbMix = $0; audio.applyReverb() })
-        }
-        .opacity(audio.reverbEnabled ? 1 : 0.35)
-        .frame(maxWidth: .infinity)
-
-        effectToggle(name: "Reverb", subtitle: reverbLabel(audio.reverbPreset),
-                     color: Theme.reverbColor,
-                     enabled: Binding(get: { audio.reverbEnabled },
-                                      set: { audio.reverbEnabled = $0; audio.applyReverb() }))
-    }
-
-    @ViewBuilder
-    private func delayParamsView() -> some View {
-        HStack(spacing: 20) {
-            knobWithDrag(label: "Time", value: audio.delayTime, range: 0...1,
-                         bipolar: false, color: Theme.delayColor,
-                         display: { "\(Int($0 * 1000)) ms" },
-                         setter: { audio.delayTime = $0; audio.applyDelay() })
-
-            knobWithDrag(label: "Feedback", value: audio.delayFeedback, range: 0...80,
-                         bipolar: false, color: Theme.delayColor,
-                         display: { "\(Int($0))%" },
-                         setter: { audio.delayFeedback = $0; audio.applyDelay() })
-
-            knobWithDrag(label: "Mix", value: audio.delayMix, range: 0...100,
-                         bipolar: false, color: Theme.delayColor,
-                         display: { "\(Int($0))%" },
-                         setter: { audio.delayMix = $0; audio.applyDelay() })
-        }
-        .opacity(audio.delayEnabled ? 1 : 0.35)
-        .frame(maxWidth: .infinity)
-
-        effectToggle(name: "Delay", subtitle: "\(Int(audio.delayTime * 1000)) ms \u{00B7} \(Int(audio.delayFeedback))% fb",
-                     color: Theme.delayColor,
-                     enabled: Binding(get: { audio.delayEnabled },
-                                      set: { audio.delayEnabled = $0; audio.applyDelay() }))
-    }
-
-    private func effectToggle(name: String, subtitle: String, color: Color, enabled: Binding<Bool>) -> some View {
-        Button { enabled.wrappedValue.toggle() } label: {
-            HStack(spacing: 8) {
-                ZStack {
-                    if enabled.wrappedValue {
-                        Circle().fill(color).frame(width: 8, height: 8)
-                    } else {
-                        Circle().stroke(color.opacity(0.5), lineWidth: 1).frame(width: 8, height: 8)
-                    }
-                }
-                Text(enabled.wrappedValue ? "On" : "Off")
-                    .font(.system(size: 11, weight: .semibold, design: .default))
-                    .foregroundStyle(enabled.wrappedValue ? Theme.textPrimary : Theme.textTertiary)
-                Text("\u{00B7}")
-                    .foregroundStyle(Theme.textTertiary)
-                Text(name)
-                    .font(.system(size: 11, design: .default))
-                    .foregroundStyle(Theme.textSecondary)
-                Text(subtitle)
-                    .font(.system(size: 9, design: .monospaced))
-                    .foregroundStyle(Theme.textTertiary)
-                    .lineLimit(1)
-            }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(enabled.wrappedValue ? color.opacity(0.1) : Theme.surface.opacity(0.5))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(RoundedRectangle(cornerRadius: 6).stroke(
-                enabled.wrappedValue ? color.opacity(0.3) : Theme.line))
-        }
-        .buttonStyle(.plain)
-    }
-
-    // MARK: - Draggable Knob Wrapper
-
-    private func knobWithDrag(label: String, value: Double, range: ClosedRange<Double>,
-                              bipolar: Bool, color: Color,
-                              display: (Double) -> String,
-                              setter: @escaping (Double) -> Void) -> some View {
-        let normalized = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-
-        return KnobView(value: normalized, bipolar: bipolar, color: color,
-                        label: label, displayValue: display(value))
             .gesture(
                 DragGesture(minimumDistance: 1)
                     .onChanged { gesture in
                         let delta = -gesture.translation.height / 150
                         let newNorm = min(max(normalized + delta, 0), 1)
-                        let newVal = range.lowerBound + newNorm * (range.upperBound - range.lowerBound)
-                        setter(newVal)
+                        value = range.lowerBound + newNorm * (range.upperBound - range.lowerBound)
                     }
             )
+
+            Text(displayValue)
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .foregroundColor(Theme.textPrimary)
+            Text(label)
+                .font(.system(size: 8, weight: .medium, design: .monospaced))
+                .foregroundColor(Theme.textTertiary)
+        }
     }
 
-    // MARK: - Formatting
+    private var displayValue: String {
+        if bipolar {
+            let v = Int(value)
+            return (v >= 0 ? "+" : "") + "\(v)"
+        } else if range.upperBound > 10 {
+            return "\(Int(value))"
+        } else {
+            return "\(Int(value * 1000))ms"
+        }
+    }
 
-    private func formatTimerDuration(_ t: TimeInterval) -> String {
-        let m = Int(t) / 60
-        let s = Int(t) % 60
-        let tenths = Int((t - Double(Int(t))) * 10)
-        return String(format: "%02d:%02d.%d", m, s, tenths)
+    private func angleForValue(_ v: Double) -> Double {
+        (startAngle + sweepAngle * min(max(v, 0), 1)) * .pi / 180
+    }
+
+    private func arcPath(from: Double, to: Double) -> Path {
+        let r = size / 2 - 3, c = CGPoint(x: size / 2, y: size / 2)
+        let s = min(from, to), e = max(from, to)
+        return Path { p in
+            p.addArc(center: c, radius: r,
+                     startAngle: Angle(degrees: startAngle + sweepAngle * s),
+                     endAngle: Angle(degrees: startAngle + sweepAngle * e),
+                     clockwise: false)
+        }
+    }
+
+    private func indicatorLine() -> Path {
+        let a = angleForValue(normalized)
+        let c = CGPoint(x: size / 2, y: size / 2)
+        let innerR = size * 0.19, outerR = size / 2 - 3
+        return Path { p in
+            p.move(to: CGPoint(x: c.x + innerR * cos(a), y: c.y + innerR * sin(a)))
+            p.addLine(to: CGPoint(x: c.x + outerR * cos(a), y: c.y + outerR * sin(a)))
+        }
     }
 }
 
-// ── Entry Point ──────────────────────────────────────────────────────────────
+struct TransportBar: View {
+    @ObservedObject var audio: AudioManager
 
-AVCaptureDevice.requestAccess(for: .audio) { granted in
-    print("[Monitor] Mic access: \(granted)")
+    private var timerText: String {
+        let t = audio.recordingDuration
+        let mins = Int(t) / 60
+        let secs = Int(t) % 60
+        let tenths = Int((t - floor(t)) * 10)
+        return String(format: "%02d:%02d.%d", mins, secs, tenths)
+    }
+
+    var body: some View {
+        HStack(spacing: 0) {
+            // Timer + status (left)
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(audio.isRecording ? Theme.danger : (audio.isMonitoring ? Theme.accent : Theme.textTertiary))
+                        .frame(width: 6, height: 6)
+                    Text(audio.isRecording ? "REC · TRK \(String(format: "%02d", audio.selectedTrack + 1))"
+                         : (audio.isMonitoring ? "LIVE" : "IDLE"))
+                        .font(.system(size: 9, weight: .black, design: .monospaced))
+                        .foregroundColor(audio.isRecording ? Theme.danger : (audio.isMonitoring ? Theme.accent : Theme.textTertiary))
+                        .tracking(2)
+                }
+                Text(timerText)
+                    .font(.system(size: 42, weight: .black, design: .monospaced))
+                    .foregroundColor(audio.isRecording ? Theme.danger : Theme.textPrimary)
+                    .monospacedDigit()
+            }
+            .frame(width: 200, alignment: .leading)
+
+            Spacer()
+
+            // Central transport buttons
+            HStack(spacing: 8) {
+                // UNDO
+                Button {
+                    audio.undoTrack(audio.selectedTrack)
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("UNDO")
+                            .font(.system(size: 8, weight: .black, design: .monospaced))
+                    }
+                    .frame(width: 52, height: 52)
+                    .background(Theme.surfaceRaised)
+                    .foregroundColor(Theme.textSecondary)
+                    .cornerRadius(6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line))
+                }.buttonStyle(.plain)
+
+                // PLAY ALL
+                Button { audio.playAll() } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 16, weight: .bold))
+                        Text("PLAY ALL")
+                            .font(.system(size: 8, weight: .black, design: .monospaced))
+                    }
+                    .frame(width: 64, height: 52)
+                    .background(Theme.surfaceRaised)
+                    .foregroundColor(Theme.accent)
+                    .cornerRadius(6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line))
+                }.buttonStyle(.plain)
+
+                // RECORD (big)
+                Button {
+                    if audio.isRecording { audio.stopRecording(); audio.startTrackLoop(audio.selectedTrack) }
+                    else { audio.startRecording() }
+                } label: {
+                    VStack(spacing: 4) {
+                        Circle()
+                            .fill(audio.isRecording ? Theme.danger : Color.red.opacity(0.8))
+                            .frame(width: 18, height: 18)
+                            .overlay(
+                                Circle().stroke(audio.isRecording ? Theme.danger.opacity(0.4) : Color.clear, lineWidth: 4)
+                            )
+                        Text(audio.isRecording ? "STOP" : "REC")
+                            .font(.system(size: 11, weight: .black, design: .monospaced))
+                            .tracking(1)
+                    }
+                    .frame(width: 80, height: 60)
+                    .background(audio.isRecording ? Theme.danger.opacity(0.15) : Theme.surfaceRaised)
+                    .foregroundColor(audio.isRecording ? Theme.danger : Theme.textPrimary)
+                    .cornerRadius(8)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(audio.isRecording ? Theme.danger : Theme.line))
+                }.buttonStyle(.plain)
+
+                // STOP ALL (panic)
+                Button { audio.stopAll() } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: "stop.fill")
+                            .font(.system(size: 18, weight: .bold))
+                        Text("STOP ALL")
+                            .font(.system(size: 8, weight: .black, design: .monospaced))
+                    }
+                    .frame(width: 72, height: 60)
+                    .background(Theme.surfaceRaised)
+                    .foregroundColor(Theme.danger)
+                    .cornerRadius(8)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(Theme.danger.opacity(0.3)))
+                }.buttonStyle(.plain)
+
+                // CLEAR ALL
+                Button { audio.clearAll() } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: "trash")
+                            .font(.system(size: 14, weight: .bold))
+                        Text("CLEAR")
+                            .font(.system(size: 8, weight: .black, design: .monospaced))
+                    }
+                    .frame(width: 52, height: 52)
+                    .background(Theme.surfaceRaised)
+                    .foregroundColor(Theme.textSecondary)
+                    .cornerRadius(6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.line))
+                }.buttonStyle(.plain)
+            }
+
+            Spacer()
+
+            // Right: Volume + Monitor toggle
+            HStack(spacing: 12) {
+                ArcKnob(label: "VOL", value: Binding(
+                    get: { audio.volume * 100 },
+                    set: { audio.volume = $0 / 100; audio.masterMixer?.outputVolume = Float(audio.volume) }
+                ), range: 0...100, color: Theme.accent)
+
+                // MONITOR toggle
+                Button {
+                    if audio.isMonitoring { audio.stopMonitoring() }
+                    else { audio.startMonitoring() }
+                } label: {
+                    VStack(spacing: 3) {
+                        Image(systemName: audio.isMonitoring ? "headphones" : "headphones")
+                            .font(.system(size: 16, weight: .bold))
+                        Text(audio.isMonitoring ? "ON" : "OFF")
+                            .font(.system(size: 9, weight: .black, design: .monospaced))
+                            .tracking(1)
+                    }
+                    .frame(width: 56, height: 56)
+                    .background(audio.isMonitoring ? Theme.accent : Theme.surfaceRaised)
+                    .foregroundColor(audio.isMonitoring ? .black : Theme.textSecondary)
+                    .cornerRadius(6)
+                    .overlay(RoundedRectangle(cornerRadius: 6).stroke(audio.isMonitoring ? Theme.accent : Theme.line))
+                }.buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(Theme.surface)
+        .overlay(Rectangle().fill(Theme.line).frame(height: 0.5), alignment: .top)
+    }
 }
 
-let audioManager = AudioManager()
-let app = NSApplication.shared
-app.setActivationPolicy(.regular)
+struct StatusFooter: View {
+    @ObservedObject var audio: AudioManager
 
-let rootView = ContentView().environmentObject(audioManager)
-let controller = NSHostingController(rootView: rootView)
-let window = NSWindow(contentViewController: controller)
-window.title = "OP-XY Monitor"
-window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-window.setContentSize(NSSize(width: 1200, height: 720))
-window.minSize = NSSize(width: 800, height: 500)
-window.center()
-window.titlebarAppearsTransparent = true
-window.titleVisibility = .hidden
-window.backgroundColor = NSColor(red: 0x26/255.0, green: 0x28/255.0, blue: 0x2B/255.0, alpha: 1)
-window.appearance = NSAppearance(named: .darkAqua)
-window.isMovableByWindowBackground = true
-window.makeKeyAndOrderFront(nil)
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(audio.status)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(Theme.textTertiary)
+                .lineLimit(1)
+            Spacer()
+            Text("OP-XY MONITOR v1.0")
+                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                .foregroundColor(Theme.textTertiary.opacity(0.5))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(Theme.bg)
+        .overlay(Rectangle().fill(Theme.line).frame(height: 0.5), alignment: .top)
+    }
+}
+
+// ── Window Accessor ──────────────────────────────────────────────────────────
+
+struct WindowAccessor: NSViewRepresentable {
+    let callback: (NSWindow) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            if let window = view.window {
+                window.titlebarAppearsTransparent = true
+                window.titleVisibility = .hidden
+                window.isMovableByWindowBackground = true
+                window.backgroundColor = NSColor(red: 0x14/255, green: 0x15/255, blue: 0x17/255, alpha: 1)
+                if let contentView = window.contentView {
+                    contentView.wantsLayer = true
+                    contentView.superview?.wantsLayer = true
+                }
+                callback(window)
+            }
+        }
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+// ── Root View ────────────────────────────────────────────────────────────────
+
+struct ContentView: View {
+    @StateObject private var audio = AudioManager()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HeaderBar(audio: audio)
+            SignalBar(audio: audio)
+            CompactMeterBar(audio: audio)
+
+            if audio.showEffects {
+                DrawerEffectsView(audio: audio)
+            }
+
+            // Loop Grid — the heart of the UI
+            ScrollView(.vertical, showsIndicators: false) {
+                LoopGridView(audio: audio)
+            }
+
+            // Mini waveform scope strip
+            MiniScopeView(audio: audio)
+
+            TransportBar(audio: audio)
+            StatusFooter(audio: audio)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(Theme.bg)
+        .background(WindowAccessor { _ in })
+        .onAppear {
+            audio.startMonitoring()
+        }
+    }
+}
+
+// ── App Entry Point ──────────────────────────────────────────────────────────
+
+@main
+struct MonitorApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+
+    var body: some Scene {
+        WindowGroup {
+            ContentView()
+                .frame(minWidth: 980, minHeight: 620)
+        }
+        .windowStyle(.hiddenTitleBar)
+    }
+}
 
 class AppDelegate: NSObject, NSApplicationDelegate {
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.setActivationPolicy(.regular)
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async {
+            for window in NSApplication.shared.windows {
+                window.titlebarAppearsTransparent = true
+                window.titleVisibility = .hidden
+                window.isMovableByWindowBackground = true
+                window.backgroundColor = NSColor(red: 0x14/255, green: 0x15/255, blue: 0x17/255, alpha: 1)
+                window.appearance = NSAppearance(named: .darkAqua)
+                window.styleMask.insert(.fullSizeContentView)
+            }
+        }
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        return true
+    }
 }
-let appDelegate = AppDelegate()
-app.delegate = appDelegate
-app.activate(ignoringOtherApps: true)
-app.run()
