@@ -2,6 +2,13 @@
 looper
 monitor_bin
 monitor_ui
+monitor
+
+# Build artifacts
+.build/
+OPXYMultitrack/.build/
+OP-XY Monitor.app/
+Models/
 
 # Recordings
 *.wav

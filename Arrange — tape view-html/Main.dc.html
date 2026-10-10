@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TAPE 08 — Arrange</title>
+<script src="./vendor/react.js"></script>
+<script src="./vendor/react-dom.js"></script>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&amp;family=Martian+Mono:wdth,wght@75..112.5,100..500&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#08080A}
+a{color:#8C8981;text-decoration:none}a:hover{color:#ECE8DE}
+button{font-family:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible,input:focus-visible{outline:1px solid #ECE8DE;outline-offset:2px}
+.dots{background-image:radial-gradient(rgba(236,232,222,0.07) 1px,transparent 1px);background-size:16px 16px}
+.reel{transform-box:fill-box;transform-origin:center}
+.spin{animation:reelspin 2.6s linear infinite}
+.spin-fast{animation:reelspin 1.4s linear infinite}
+@keyframes reelspin{to{transform:rotate(360deg)}}
+.blink{animation:blink 1s steps(2,start) infinite}
+@keyframes blink{to{visibility:hidden}}
+input[type=range]{-webkit-appearance:none;appearance:none;background:transparent;height:24px;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:1px;background:rgba(236,232,222,0.22)}
+input[type=range]::-moz-range-track{height:1px;background:rgba(236,232,222,0.22)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:6px;height:16px;margin-top:-8px;background:#ECE8DE;border:0;border-radius:0}
+input[type=range]::-moz-range-thumb{width:6px;height:16px;background:#ECE8DE;border:0;border-radius:0}
+</style>
+</helmet>
+<div class="{{bgClass}}" style="min-height: 100vh; background-color: #08080A; color: #ECE8DE; font-family: 'IBM Plex Mono', ui-monospace, monospace; display: flex; flex-direction: column; font-size: 12px; letter-spacing: 0.04em">
+
+<!-- ═════ TOP STRIP ═════ -->
+<header style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px 32px; padding: 14px 28px; border-bottom: 1px solid rgba(236,232,222,0.10)">
+<div style="display: flex; align-items: center; gap: 14px">
+<svg width="22" height="22" viewBox="0 0 22 22" aria-hidden="true"><circle cx="6" cy="11" r="4.5" fill="none" stroke="#ECE8DE" stroke-width="1"></circle><circle cx="16" cy="11" r="4.5" fill="none" stroke="#ECE8DE" stroke-width="1"></circle><line x1="2" y1="18" x2="20" y2="18" stroke="#ECE8DE" stroke-width="1"></line></svg>
+<span style="font-family: 'Martian Mono', monospace; font-weight: 400; font-size: 13px; letter-spacing: 0.24em">TAPE 08</span>
+<span style="color: #6E6B64; font-size: 10px; letter-spacing: 0.2em">MULTITRACK / R 2.0.1</span>
+</div>
+<nav aria-label="Views" style="display: flex; gap: 4px; font-size: 11px; letter-spacing: 0.22em">
+<a href="Main.dc.html" aria-current="page" style="padding: 8px 14px; color: #ECE8DE; border-bottom: 1px solid {{accent}}">ARRANGE</a>
+<a href="Mixer.dc.html" style="padding: 8px 14px">MIX</a>
+<a href="#" style="padding: 8px 14px">EDIT</a>
+<a href="#" style="padding: 8px 14px">EXPORT</a>
+</nav>
+<div style="display: flex; align-items: center; gap: 20px; font-size: 10px; letter-spacing: 0.2em; color: #8C8981">
+<span style="display: flex; align-items: center; gap: 8px; color: {{statusColor}}"><span class="{{statusBlink}}" style="width: 6px; height: 6px; border-radius: 50%; background: {{statusColor}}"></span>{{status}}</span>
+<span>48 kHZ · 24 BIT</span>
+<span>BUF 256</span>
+<span>CPU 12%</span>
+</div>
+</header>
+
+<!-- ═════ HEAD UNIT ═════ -->
+<section aria-label="Transport display" style="display: flex; flex-wrap: wrap; align-items: stretch; gap: 24px; padding: 20px 28px 8px; border-bottom: 1px solid rgba(236,232,222,0.10)">
+
+<!-- left: selected track -->
+<div style="flex: 1 1 240px; display: flex; flex-direction: column; justify-content: space-between; gap: 20px; padding: 8px 0">
+<div style="display: flex; align-items: flex-start; gap: 18px">
+<div style="width: 84px; height: 84px; border: 1.5px solid #ECE8DE; display: flex; align-items: center; justify-content: center; font-family: 'Martian Mono', monospace; font-weight: 200; font-size: 44px; color: {{accent}}">{{selNum}}</div>
+<div style="display: flex; flex-direction: column; gap: 6px; padding-top: 4px">
+<span style="font-size: 10px; letter-spacing: 0.24em; color: #8C8981">SELECTED TRACK</span>
+<span style="font-family: 'Martian Mono', monospace; font-size: 16px; letter-spacing: 0.12em">{{selName}}</span>
+<span style="font-size: 10px; letter-spacing: 0.2em; color: #FF4D5E">● ARMED</span>
+</div>
+</div>
+<dl style="margin: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 16px; font-size: 10px; letter-spacing: 0.18em">
+<div><dt style="color: #6E6B64">INPUT</dt><dd style="margin: 4px 0 0">MBP MIC</dd></div>
+<div><dt style="color: #6E6B64">OUTPUT</dt><dd style="margin: 4px 0 0">MBP SPK</dd></div>
+<div><dt style="color: #6E6B64">POSITION</dt><dd style="margin: 4px 0 0">BAR {{barBeat}}</dd></div>
+<div><dt style="color: #6E6B64">LOOP</dt><dd style="margin: 4px 0 0; color: #5BE39A">{{loopLabel}}</dd></div>
+</dl>
+</div>
+
+<!-- centre: reels + timecode -->
+<div style="flex: 2 1 560px; position: relative; min-height: 230px; display: flex; justify-content: center">
+<sc-if value="{{showReels}}" hint-placeholder-val="{{ true }}">
+<svg viewBox="0 0 800 236" preserveAspectRatio="xMidYMid meet" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-hidden="true">
+<!-- tape packs -->
+<circle cx="140" cy="108" r="74" fill="none" stroke="#1F1F23" stroke-width="34"></circle>
+<circle cx="660" cy="108" r="58" fill="none" stroke="#1F1F23" stroke-width="10"></circle>
+<!-- reel outer -->
+<circle cx="140" cy="108" r="96" fill="none" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<circle cx="660" cy="108" r="96" fill="none" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<!-- left reel rotor -->
+<g class="reel {{spinClass}}">
+<circle cx="140" cy="108" r="96" fill="none" stroke="none"></circle>
+<line x1="140" y1="78" x2="140" y2="34" stroke="#ECE8DE" stroke-width="1.5"></line>
+<line x1="166" y1="123" x2="204" y2="145" stroke="#ECE8DE" stroke-width="1.5"></line>
+<line x1="114" y1="123" x2="76" y2="145" stroke="#ECE8DE" stroke-width="1.5"></line>
+<circle cx="140" cy="108" r="22" fill="none" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<circle cx="140" cy="108" r="11" fill="none" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<circle cx="140" cy="108" r="3" fill="#ECE8DE"></circle>
+<line x1="140" y1="82" x2="140" y2="86" stroke="#ECE8DE" stroke-width="1.5"></line>
+</g>
+<!-- right reel rotor -->
+<g class="reel {{spinClass}}">
+<circle cx="660" cy="108" r="96" fill="none" stroke="none"></circle>
+<line x1="660" y1="78" x2="660" y2="34" stroke="#ECE8DE" stroke-width="1.5"></line>
+<line x1="686" y1="123" x2="724" y2="145" stroke="#ECE8DE" stroke-width="1.5"></line>
+<line x1="634" y1="123" x2="596" y2="145" stroke="#ECE8DE" stroke-width="1.5"></line>
+<circle cx="660" cy="108" r="22" fill="none" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<circle cx="660" cy="108" r="11" fill="none" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<circle cx="660" cy="108" r="3" fill="#ECE8DE"></circle>
+</g>
+<!-- tape path -->
+<polyline points="70,160 236,214 312,220 400,222 488,220 564,214 730,160" fill="none" stroke="#7A776F" stroke-width="1.2"></polyline>
+<circle cx="236" cy="214" r="9" fill="#08080A" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<circle cx="312" cy="220" r="13" fill="#08080A" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<circle cx="312" cy="220" r="4" fill="#ECE8DE"></circle>
+<rect x="386" y="204" width="28" height="26" fill="#08080A" stroke="#ECE8DE" stroke-width="1.5"></rect>
+<line x1="400" y1="214" x2="400" y2="230" stroke="{{accent}}" stroke-width="1.5"></line>
+<circle cx="488" cy="220" r="13" fill="#08080A" stroke="#ECE8DE" stroke-width="1.5"></circle>
+<line x1="482" y1="226" x2="494" y2="214" stroke="#ECE8DE" stroke-width="1.5"></line>
+<circle cx="564" cy="214" r="9" fill="#08080A" stroke="#ECE8DE" stroke-width="1.5"></circle>
+</svg>
+</sc-if>
+<div style="position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 10px; padding-top: 18px">
+<span style="font-size: 10px; letter-spacing: 0.32em; color: #8C8981">TRK {{selNum}} · {{status}}</span>
+<span style="font-family: 'Martian Mono', monospace; font-weight: 200; font-size: 60px; line-height: 1; letter-spacing: 0.02em; font-variant-numeric: tabular-nums">{{timecode}}</span>
+<div aria-hidden="true" style="display: flex; align-items: flex-end; gap: 9px; height: 14px">
+<span style="width: 1.5px; height: 6px; background: #4A4842"></span>
+<span style="width: 1.5px; height: 8px; background: #4A4842"></span>
+<span style="width: 1.5px; height: 6px; background: #4A4842"></span>
+<span style="width: 1.5px; height: 14px; background: #ECE8DE"></span>
+<span style="width: 1.5px; height: 6px; background: #4A4842"></span>
+<span style="width: 1.5px; height: 8px; background: #4A4842"></span>
+<span style="width: 1.5px; height: 6px; background: #4A4842"></span>
+</div>
+<button type="button" onClick="{{toggleLoop}}" aria-pressed="{{loopPressed}}" aria-label="Toggle loop" style="margin-top: 6px; width: 76px; height: 44px; background: transparent; border: 0; display: flex; align-items: center; justify-content: center; color: {{loopColor}}">
+<svg width="64" height="30" viewBox="0 0 64 30" aria-hidden="true"><path d="M20 4 H44 a11 11 0 0 1 0 22 H20 a11 11 0 0 1 0 -22" fill="none" stroke="currentColor" stroke-width="1.8"></path><path d="M34 0 L27 4 L34 8" fill="none" stroke="currentColor" stroke-width="1.8"></path></svg>
+</button>
+</div>
+</div>
+
+<!-- right: meters -->
+<div style="flex: 1 1 240px; display: flex; justify-content: flex-end; gap: 28px; padding: 8px 0">
+<div style="display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end; gap: 16px">
+<div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px">
+<span style="font-size: 10px; letter-spacing: 0.24em; color: #8C8981">PEAK</span>
+<span style="font-family: 'Martian Mono', monospace; font-weight: 300; font-size: 28px; font-variant-numeric: tabular-nums">{{peak}}<span style="font-size: 12px; color: #8C8981"> dB</span></span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: flex-end; gap: 4px">
+<span style="font-size: 10px; letter-spacing: 0.24em; color: #8C8981">TEMPO / SIG</span>
+<span style="font-family: 'Martian Mono', monospace; font-weight: 300; font-size: 20px">{{bpm}} · 4/4</span>
+</div>
+</div>
+<div role="img" aria-label="Input level meters, left and right" style="display: flex; gap: 14px; height: 196px">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 6px">
+<div style="position: relative; width: 2px; flex: 1; background: rgba(236,232,222,0.12)">
+<div style="position: absolute; left: 0; right: 0; bottom: 0; height: {{lvlL}}%; background: #FF4D5E"></div>
+<div style="position: absolute; left: -5px; width: 12px; height: 12px; border-radius: 50%; background: #FF4D5E; bottom: calc({{lvlL}}% - 6px)"></div>
+</div>
+<span style="font-size: 10px; color: #8C8981">L</span>
+</div>
+<div style="display: flex; flex-direction: column; align-items: center; gap: 6px">
+<div style="position: relative; width: 2px; flex: 1; background: rgba(236,232,222,0.12)">
+<div style="position: absolute; left: 0; right: 0; bottom: 0; height: {{lvlR}}%; background: #FF4D5E"></div>
+<div style="position: absolute; left: -5px; width: 12px; height: 12px; border-radius: 50%; background: #FF4D5E; bottom: calc({{lvlR}}% - 6px)"></div>
+</div>
+<span style="font-size: 10px; color: #8C8981">R</span>
+</div>
+<div aria-hidden="true" style="display: flex; flex-direction: column; justify-content: space-between; font-size: 9px; color: #6E6B64; padding-bottom: 18px">
+<span>0</span><span>-6</span><span>-12</span><span>-24</span><span>-36</span><span>-60</span>
+</div>
+</div>
+</div>
+</section>
+
+<!-- ═════ TRACKS ═════ -->
+<main style="flex: 1; display: flex; flex-direction: column; padding: 0 28px 16px">
+
+<!-- ruler -->
+<div style="display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0 16px; padding-top: 18px">
+<div style="flex: 0 0 200px; font-size: 10px; letter-spacing: 0.24em; color: #6E6B64; padding-bottom: 6px">TRACKS · 08</div>
+<div style="flex: 999 1 480px; min-width: 0; position: relative; height: 40px; border-bottom: 1px solid rgba(236,232,222,0.18); background-image: repeating-linear-gradient(to right, rgba(236,232,222,0.22) 0 1px, transparent 1px 1.0417%); background-size: 100% 6px; background-repeat: no-repeat; background-position: bottom">
+<sc-for list="{{ruler}}" as="r" hint-placeholder-count="24">
+<div style="position: absolute; bottom: 0; left: {{r.left}}%; width: 1px; height: {{r.h}}px; background: {{r.c}}"></div>
+<sc-if value="{{r.label}}" hint-placeholder-val="{{ false }}">
+<span style="position: absolute; top: 0; left: {{r.left}}%; padding-left: 4px; font-size: 10px; color: #8C8981">{{r.n}}</span>
+</sc-if>
+</sc-for>
+<sc-if value="{{loop}}" hint-placeholder-val="{{ true }}">
+<div style="position: absolute; top: 20px; left: {{loopLeft}}%; width: {{loopWidth}}%; height: 2px; background: #5BE39A">
+<span style="position: absolute; left: -5px; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: #5BE39A"></span>
+<span style="position: absolute; right: -5px; top: -4px; width: 10px; height: 10px; border-radius: 50%; background: #5BE39A"></span>
+</div>
+</sc-if>
+<div style="position: absolute; bottom: -1px; left: {{playLeft}}%; transform: translateX(-50%); width: 14px; height: 14px; border: 1.5px solid {{accent}}; background: #08080A"></div>
+</div>
+<div style="flex: 1 1 260px"></div>
+</div>
+
+<sc-for list="{{tracks}}" as="t" hint-placeholder-count="8">
+<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 6px 0; border-bottom: 1px solid rgba(236,232,222,0.07); opacity: {{t.opacity}}">
+
+<button type="button" onClick="{{t.select}}" aria-label="Select track {{t.num}}" style="flex: 0 0 200px; height: 52px; display: flex; align-items: center; gap: 14px; padding: 0; background: transparent; border: 0; color: #ECE8DE; text-align: left">
+<span style="display: flex; flex-direction: column; gap: 6px; width: 40px">
+<span style="font-family: 'Martian Mono', monospace; font-weight: 300; font-size: 18px; color: {{t.numColor}}">{{t.num}}</span>
+<span style="width: 24px; height: 2px; background: {{t.color}}"></span>
+</span>
+<span style="display: flex; flex-direction: column; gap: 4px">
+<span style="font-size: 12px; font-weight: 500; letter-spacing: 0.14em">{{t.name}}</span>
+<span style="font-size: 10px; letter-spacing: 0.16em; color: #6E6B64">{{t.io}}</span>
+</span>
+</button>
+
+<div style="flex: 999 1 480px; min-width: 0; position: relative; height: 52px; background-image: repeating-linear-gradient(to right, rgba(236,232,222,0.06) 0 1px, transparent 1px 16.6667%); border-left: 1px solid {{t.laneEdge}}; background-color: {{t.laneBg}}">
+<sc-if value="{{t.empty}}" hint-placeholder-val="{{ false }}">
+<div style="position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed rgba(236,232,222,0.12)"></div>
+<span style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: 0 10px; background: #08080A; font-size: 9px; letter-spacing: 0.36em; color: #6E6B64">EMPTY · ARM TO RECORD</span>
+</sc-if>
+<svg viewBox="0 0 2400 52" preserveAspectRatio="none" style="position: absolute; inset: 0; width: 100%; height: 100%" aria-hidden="true">
+<path d="{{t.wave}}" fill="none" stroke="{{t.color}}" stroke-width="1" vector-effect="non-scaling-stroke" opacity="0.9"></path>
+</svg>
+<sc-for list="{{t.clips}}" as="c" hint-placeholder-count="2">
+<div style="position: absolute; top: 0; bottom: 0; left: {{c.left}}%; width: {{c.w}}%; border-left: 1px solid {{t.color}}">
+<span style="position: absolute; top: 2px; left: 5px; font-size: 8px; letter-spacing: 0.2em; color: #8C8981">{{c.label}}</span>
+<span style="position: absolute; left: 0; right: 2px; bottom: 0; height: 3px; background: {{t.color}}"></span>
+</div>
+</sc-for>
+<div style="position: absolute; top: -7px; bottom: -7px; left: {{playLeft}}%; width: 1px; background: #ECE8DE"></div>
+</div>
+
+<div style="flex: 1 1 260px; display: flex; align-items: center; gap: 6px">
+<button type="button" onClick="{{t.select}}" aria-pressed="{{t.armPressed}}" aria-label="Arm track {{t.num}}" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid rgba(236,232,222,0.14); border-radius: 50%">
+<span style="width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid #FF4D5E; background: {{t.armFill}}"></span>
+</button>
+<button type="button" onClick="{{t.mute}}" aria-pressed="{{t.mPressed}}" aria-label="Mute track {{t.num}}" style="width: 44px; height: 44px; border: 1px solid rgba(236,232,222,0.14); background: {{t.mBg}}; color: {{t.mFg}}; font-size: 11px; font-weight: 600">M</button>
+<button type="button" onClick="{{t.solo}}" aria-pressed="{{t.sPressed}}" aria-label="Solo track {{t.num}}" style="width: 44px; height: 44px; border: 1px solid rgba(236,232,222,0.14); background: {{t.sBg}}; color: {{t.sFg}}; font-size: 11px; font-weight: 600">S</button>
+<label style="flex: 1; display: flex; align-items: center; gap: 10px; padding-left: 8px; min-width: 110px">
+<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Track {{t.num}} volume</span>
+<input type="range" min="0" max="100" value="{{t.vol}}" onChange="{{t.setVol}}" style="flex: 1; min-width: 60px">
+<span style="width: 24px; text-align: right; font-size: 11px; color: #8C8981; font-variant-numeric: tabular-nums">{{t.vol}}</span>
+</label>
+</div>
+</div>
+</sc-for>
+</main>
+
+<!-- ═════ TRANSPORT ═════ -->
+<footer style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px 24px; padding: 14px 28px; border-top: 1px solid rgba(236,232,222,0.10); background: #0C0C0E">
+<div style="flex: 1 1 220px; display: flex; align-items: center; gap: 12px; font-size: 11px; letter-spacing: 0.2em">
+<span style="width: 10px; height: 10px; background: {{accent}}"></span>
+<span style="color: {{accent}}">TRK {{selNum}}</span>
+<span style="color: #6E6B64">/ {{selName}}</span>
+</div>
+
+<div role="group" aria-label="Transport" style="display: flex; flex-wrap: wrap; gap: 6px; font-size: 11px; letter-spacing: 0.22em">
+<button type="button" style="height: 44px; padding: 0 18px; display: flex; align-items: center; gap: 8px; background: transparent; border: 1px solid rgba(236,232,222,0.16); color: #ECE8DE">
+<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M4 2 L1 5 L4 8 M1 5 H9 a4 4 0 0 1 0 8 H6" fill="none" stroke="currentColor" stroke-width="1.3"></path></svg>UNDO</button>
+<button type="button" onClick="{{togglePlay}}" aria-pressed="{{playPressed}}" style="height: 44px; padding: 0 22px; display: flex; align-items: center; gap: 8px; background: {{playBg}}; border: 1px solid {{accent}}; color: {{playFg}}">
+<svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true"><path d="{{playIcon}}" fill="currentColor"></path></svg>{{playLabel}}</button>
+<button type="button" onClick="{{toggleRec}}" aria-pressed="{{recPressed}}" style="height: 44px; padding: 0 26px; display: flex; align-items: center; gap: 8px; background: {{recBg}}; border: 1px solid #FF4D5E; color: {{recFg}}">
+<span style="width: 10px; height: 10px; border-radius: 50%; background: currentColor"></span>REC</button>
+<button type="button" onClick="{{stop}}" style="height: 44px; padding: 0 18px; display: flex; align-items: center; gap: 8px; background: transparent; border: 1px solid rgba(236,232,222,0.16); color: #ECE8DE">
+<span style="width: 9px; height: 9px; background: currentColor"></span>STOP</button>
+<button type="button" style="height: 44px; padding: 0 18px; background: transparent; border: 1px solid rgba(236,232,222,0.16); color: #8C8981">CLEAR</button>
+</div>
+
+<div style="flex: 1 1 220px; display: flex; align-items: center; justify-content: flex-end; gap: 10px">
+<div style="display: flex; align-items: center; border: 1px solid rgba(236,232,222,0.16)">
+<button type="button" onClick="{{bpmDown}}" aria-label="Decrease tempo" style="width: 40px; height: 44px; background: transparent; border: 0; color: #8C8981; font-size: 16px">−</button>
+<div style="width: 64px; display: flex; flex-direction: column; align-items: center; gap: 2px; border-left: 1px solid rgba(236,232,222,0.10); border-right: 1px solid rgba(236,232,222,0.10); padding: 4px 0">
+<span style="font-family: 'Martian Mono', monospace; font-size: 17px; font-weight: 400; color: {{accent}}">{{bpm}}</span>
+<span style="font-size: 8px; letter-spacing: 0.3em; color: #6E6B64">BPM</span>
+</div>
+<button type="button" onClick="{{bpmUp}}" aria-label="Increase tempo" style="width: 40px; height: 44px; background: transparent; border: 0; color: #8C8981; font-size: 16px">+</button>
+</div>
+<button type="button" onClick="{{toggleClick}}" aria-pressed="{{clickPressed}}" aria-label="Metronome" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: {{clickBg}}; border: 1px solid rgba(236,232,222,0.16); color: {{clickFg}}">
+<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M6 2 H12 L15 16 H3 Z M9 12 L13 4" fill="none" stroke="currentColor" stroke-width="1.3"></path></svg>
+</button>
+<div style="display: flex; align-items: center; gap: 8px; padding-left: 6px">
+<svg width="44" height="44" viewBox="0 0 44 44" role="img" aria-label="Master volume 85">
+<path d="{{knobTrack}}" fill="none" stroke="rgba(236,232,222,0.16)" stroke-width="2"></path>
+<path d="{{knobArc}}" fill="none" stroke="{{accent}}" stroke-width="2"></path>
+<circle cx="22" cy="22" r="10" fill="none" stroke="#ECE8DE" stroke-width="1.2"></circle>
+<line x1="22" y1="22" x2="{{knobX}}" y2="{{knobY}}" stroke="#ECE8DE" stroke-width="1.2"></line>
+</svg>
+<span style="display: flex; flex-direction: column; gap: 2px"><span style="font-family: 'Martian Mono', monospace; font-size: 13px">85</span><span style="font-size: 8px; letter-spacing: 0.3em; color: #6E6B64">VOL</span></span>
+</div>
+<button type="button" aria-label="Monitor" style="width: 44px; height: 44px; display: flex; align-items: center; justify-content: center; background: transparent; border: 1px solid rgba(236,232,222,0.16); border-radius: 50%; color: #ECE8DE">
+<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true"><path d="M3 12 V9 a6 6 0 0 1 12 0 V12 M3 11 H5 V15 H3 Z M13 11 H15 V15 H13 Z" fill="none" stroke="currentColor" stroke-width="1.3"></path></svg>
+</button>
+</div>
+</footer>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#E8B04A","options":["#E8B04A","#ECE8DE","#5CC8E0","#FF8A3D"]},"showReels":{"editor":"boolean","default":true},"dotGrid":{"editor":"boolean","default":true},"$preview":{"width":1440,"height":940}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.SPAN = 48; // seconds in view (24 bars @ 120)
+    this.base = [
+      { name: 'KICK LOOP', io: 'IN 1 · MONO', color: '#FF5A6A', clips: [[0, 8, 'TAKE 1'], [8, 16, 'TAKE 1'], [16, 24, 'TAKE 2']], vol: 80, seed: 1, perc: true },
+      { name: 'BASS DI', io: 'IN 2 · MONO', color: '#6F8CFF', clips: [[4, 20, 'TAKE 3']], vol: 72, seed: 2 },
+      { name: 'PAD', io: 'SYNTH · STEREO', color: '#5BE39A', clips: [[0, 12, 'TAKE 1'], [12, 24, 'TAKE 1']], vol: 64, seed: 3, pad: true },
+      { name: 'VOX', io: 'IN 1 · MONO', color: '#E8B04A', clips: [[8, 14, 'TAKE 5'], [16, 22, 'TAKE 2']], vol: 86, seed: 4 },
+      { name: 'GUITAR', io: 'IN 2 · MONO', color: '#A98BFF', clips: [[2, 6, 'TAKE 1'], [10, 18, 'TAKE 4']], vol: 70, seed: 5 },
+      { name: 'PERC', io: 'IN 1 · MONO', color: '#5CC8E0', clips: [[12, 24, 'TAKE 1']], vol: 58, seed: 6, perc: true },
+      { name: 'TRK 07', io: 'IN 1 · MONO', color: '#FF8A3D', clips: [], vol: 80, seed: 7 },
+      { name: 'TRK 08', io: 'IN 1 · MONO', color: '#CFC8B8', clips: [], vol: 80, seed: 8 }
+    ];
+    this.waves = this.base.map((t) => this.buildWave(t));
+    this.state = {
+      time: 13.4, playing: false, rec: false, sel: 0, loop: true, click: false, bpm: 120,
+      vols: this.base.map((t) => t.vol), mutes: this.base.map(() => false), solos: this.base.map(() => false)
+    };
+  }
+  buildWave(t) {
+    let d = '';
+    t.clips.forEach(([a, b]) => {
+      const x0 = a * 100 + 6, x1 = b * 100 - 6;
+      for (let x = x0; x < x1; x += 8) {
+        const i = x / 8;
+        let amp;
+        if (t.perc) amp = Math.exp(-((x % 50) / 9)) * 0.9 + 0.05;
+        else if (t.pad) amp = 0.35 + 0.2 * Math.sin(i * 0.05 + t.seed) + 0.08 * Math.sin(i * 0.9);
+        else amp = Math.abs(Math.sin(i * 0.37 + t.seed) * 0.55 + Math.sin(i * 0.11 + t.seed * 2) * 0.35 + Math.sin(i * 1.7 + t.seed * 3) * 0.1);
+        const edge = Math.min(1, (x - x0) / 40, (x1 - x) / 40);
+        const h = Math.max(0.6, amp * edge * 19);
+        d += 'M' + x + ' ' + (26 - h).toFixed(1) + 'V' + (26 + h).toFixed(1);
+      }
+    });
+    return d || 'M0 0';
+  }
+  componentDidMount() {
+    this.timer = setInterval(() => {
+      if (!this.state.playing) return;
+      let t = this.state.time + 0.1;
+      if (this.state.loop && t >= 32) t = 8;
+      if (t >= this.SPAN) t = 0;
+      this.setState({ time: t });
+    }, 100);
+  }
+  componentWillUnmount() { clearInterval(this.timer); }
+  toggleArr(key, i) {
+    const a = this.state[key].slice(); a[i] = !a[i]; this.setState({ [key]: a });
+  }
+  arc(v) {
+    const cx = 22, cy = 22, r = 18, s = 135 * Math.PI / 180, e = s + 270 * v * Math.PI / 180;
+    const p = (ang) => [cx + r * Math.cos(ang), cy + r * Math.sin(ang)];
+    const [x0, y0] = p(s), [x1, y1] = p(e);
+    return 'M' + x0.toFixed(2) + ' ' + y0.toFixed(2) + ' A' + r + ' ' + r + ' 0 ' + (270 * v > 180 ? 1 : 0) + ' 1 ' + x1.toFixed(2) + ' ' + y1.toFixed(2);
+  }
+  renderVals() {
+    const accent = this.props.accent ?? '#E8B04A';
+    const showReels = this.props.showReels ?? true;
+    const dotGrid = this.props.dotGrid ?? true;
+    const s = this.state;
+    const pad = (n, w) => String(n).padStart(w, '0');
+    const mm = Math.floor(s.time / 60), ss = Math.floor(s.time % 60), ds = Math.floor((s.time * 10) % 10);
+    const bar = Math.floor(s.time / 2) + 1, beat = Math.floor((s.time % 2) / 0.5) + 1;
+    const anySolo = s.solos.some(Boolean);
+    const lvl = s.playing ? 0.5 + 0.32 * Math.abs(Math.sin(s.time * 6.3)) : 0.04;
+    const lvlR = s.playing ? 0.46 + 0.3 * Math.abs(Math.sin(s.time * 5.1 + 1)) : 0.04;
+    const status = s.rec ? 'REC' : s.playing ? 'PLAY' : 'IDLE';
+    const ruler = [];
+    for (let b = 0; b < 24; b++) ruler.push({ n: pad(b + 1, 2), left: (b / 24) * 100, label: b % 4 === 0, h: b % 4 === 0 ? 14 : 9, c: b % 4 === 0 ? 'rgba(236,232,222,0.5)' : 'rgba(236,232,222,0.25)' });
+    const kv = 0.85, ka = 135 * Math.PI / 180 + 270 * kv * Math.PI / 180;
+    const tracks = this.base.map((t, i) => {
+      const sel = s.sel === i;
+      const audible = anySolo ? s.solos[i] : !s.mutes[i];
+      return {
+        num: pad(i + 1, 2), name: t.name, io: t.io, color: t.color, wave: this.waves[i],
+        empty: t.clips.length === 0,
+        clips: t.clips.map(([a, b, l]) => ({ left: (a / 24) * 100, w: ((b - a) / 24) * 100, label: l })),
+        opacity: audible ? 1 : 0.32,
+        numColor: sel ? accent : '#6E6B64',
+        laneEdge: sel ? accent : 'rgba(236,232,222,0.10)',
+        laneBg: sel ? 'rgba(236,232,222,0.025)' : 'transparent',
+        armFill: sel ? '#FF4D5E' : 'transparent', armPressed: sel ? 'true' : 'false',
+        mBg: s.mutes[i] ? '#E8B04A' : 'transparent', mFg: s.mutes[i] ? '#08080A' : '#8C8981', mPressed: s.mutes[i] ? 'true' : 'false',
+        sBg: s.solos[i] ? '#5CC8E0' : 'transparent', sFg: s.solos[i] ? '#08080A' : '#8C8981', sPressed: s.solos[i] ? 'true' : 'false',
+        vol: s.vols[i],
+        select: () => this.setState({ sel: i }),
+        mute: () => this.toggleArr('mutes', i),
+        solo: () => this.toggleArr('solos', i),
+        setVol: (e) => { const v = s.vols.slice(); v[i] = Number(e.target.value); this.setState({ vols: v }); }
+      };
+    });
+    return {
+      accent, showReels, bgClass: dotGrid ? 'dots' : '',
+      status, statusColor: s.rec ? '#FF4D5E' : s.playing ? accent : '#8C8981', statusBlink: s.rec ? 'blink' : '',
+      selNum: pad(s.sel + 1, 2), selName: this.base[s.sel].name,
+      timecode: pad(mm, 2) + ':' + pad(ss, 2) + '.' + ds,
+      barBeat: pad(bar, 3) + '.' + beat,
+      loop: s.loop, loopLabel: s.loop ? 'BAR 05 → 16' : 'OFF', loopLeft: (4 / 24) * 100, loopWidth: (12 / 24) * 100,
+      loopColor: s.loop ? '#5BE39A' : '#6E6B64', loopPressed: s.loop ? 'true' : 'false',
+      toggleLoop: () => this.setState({ loop: !s.loop }),
+      spinClass: s.playing ? (s.rec ? 'spin-fast' : 'spin') : '',
+      peak: s.playing ? (20 * Math.log10(lvl)).toFixed(1) : '−∞',
+      lvlL: Math.round(lvl * 100), lvlR: Math.round(lvlR * 100),
+      bpm: s.bpm, bpmUp: () => this.setState({ bpm: Math.min(240, s.bpm + 1) }), bpmDown: () => this.setState({ bpm: Math.max(40, s.bpm - 1) }),
+      ruler, tracks, playLeft: (s.time / this.SPAN) * 100,
+      togglePlay: () => this.setState({ playing: !s.playing, rec: s.playing ? false : s.rec }),
+      playLabel: s.playing ? 'PAUSE' : 'PLAY', playIcon: s.playing ? 'M2 1 H5 V11 H2 Z M7 1 H10 V11 H7 Z' : 'M2 1 L11 6 L2 11 Z',
+      playBg: s.playing ? accent : 'transparent', playFg: s.playing ? '#08080A' : accent, playPressed: s.playing ? 'true' : 'false',
+      toggleRec: () => this.setState({ rec: !s.rec, playing: s.rec ? s.playing : true }),
+      recBg: s.rec ? '#FF4D5E' : 'transparent', recFg: s.rec ? '#08080A' : '#FF4D5E', recPressed: s.rec ? 'true' : 'false',
+      stop: () => this.setState({ playing: false, rec: false, time: 0 }),
+      toggleClick: () => this.setState({ click: !s.click }),
+      clickBg: s.click ? accent : 'transparent', clickFg: s.click ? '#08080A' : '#ECE8DE', clickPressed: s.click ? 'true' : 'false',
+      knobTrack: this.arc(1), knobArc: this.arc(kv),
+      knobX: (22 + 10 * Math.cos(ka)).toFixed(2), knobY: (22 + 10 * Math.sin(ka)).toFixed(2)
+    };
+  }
+}
+</script>
+</body>
+</html>
