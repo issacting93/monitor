@@ -7,7 +7,8 @@ cd "$(dirname "$0")"
 APP_NAME="Tape 08"
 BUNDLE_ID="com.opxy.tape08"
 EXECUTABLE="Tape08"
-SOURCE="monitor.swift"
+SOURCES=(Sources/*.swift)
+BUILD_DIR=".build"          # a repo-root dir named Tape08/ exists, so build the binary here
 APP_DIR="${APP_NAME}.app"
 CONTENTS="${APP_DIR}/Contents"
 MACOS="${CONTENTS}/MacOS"
@@ -18,15 +19,16 @@ export DEVELOPER_DIR
 SWIFTC="${DEVELOPER_DIR}/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
 SDK="${DEVELOPER_DIR}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 
-echo "==> Compiling ${SOURCE}..."
-"${SWIFTC}" -O -parse-as-library "${SOURCE}" -o "${EXECUTABLE}" \
+mkdir -p "${BUILD_DIR}"
+echo "==> Compiling ${#SOURCES[@]} source file(s)..."
+"${SWIFTC}" -O -parse-as-library "${SOURCES[@]}" -o "${BUILD_DIR}/${EXECUTABLE}" \
     -target arm64-apple-macosx14.0 -sdk "${SDK}" -module-name Tape08 2>&1
 
 echo "==> Building ${APP_DIR}..."
 rm -rf "${APP_DIR}"
 mkdir -p "${MACOS}" "${RESOURCES}"
 
-mv "${EXECUTABLE}" "${MACOS}/${EXECUTABLE}"
+mv "${BUILD_DIR}/${EXECUTABLE}" "${MACOS}/${EXECUTABLE}"
 
 # Info.plist
 cat > "${CONTENTS}/Info.plist" <<PLIST
