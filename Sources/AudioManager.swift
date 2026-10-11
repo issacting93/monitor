@@ -1456,10 +1456,6 @@ class AudioManager: ObservableObject {
     private var displayTimer:   Timer?
     private var recordingTimer: Timer?
 
-    private static let timestampFmt: DateFormatter = {
-        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"; return f
-    }()
-
     init() {
         EffectAudioUnit.registerComponent()
         EffectRegistry.shared.registerBuiltIns()
@@ -2234,7 +2230,7 @@ class AudioManager: ObservableObject {
     private func beginRecording() {
         guard engine != nil, let dryTap = dryTapMixer else { return }
         let fmt  = dryTap.outputFormat(forBus: 0)
-        let name = "take_\(Self.timestampFmt.string(from: Date())).wav"
+        let name = "take_\(timestampFmt.string(from: Date())).wav"
         let url  = trackFolder(selectedTrack).appendingPathComponent(name)
         do {
             audioFile = try AVAudioFile(forWriting: url, settings: fmt.settings,
@@ -2271,7 +2267,7 @@ class AudioManager: ObservableObject {
         if !tracks.contains(where: { $0.isPlaying }) { stopMetronome() }
 
         guard let u = saved else { return }
-        let peaks = Self.computePeaks(url: u, count: Theme.clipPeaks)
+        let peaks = computePeaks(url: u, count: Theme.clipPeaks)
         let clip  = TrackClip(url: u, duration: dur, peaks: peaks)
         let rec   = Recording(url: u, duration: dur, trackIndex: trk)
 
@@ -2484,7 +2480,7 @@ class AudioManager: ObservableObject {
         guard trackIndex < tracks.count, let clip = tracks[trackIndex].clips.last else { return }
         if tracks[trackIndex].isPlaying { stopTrackLoop(trackIndex) }
         trimClipDuration = clip.duration
-        trimPeaks = Self.computePeaks(url: clip.url, count: 256)
+        trimPeaks = computePeaks(url: clip.url, count: 256)
         trimStart = 0
         trimEnd = 1
         trimmingTrack = trackIndex
@@ -2512,7 +2508,7 @@ class AudioManager: ObservableObject {
 
         // Write trimmed file
         let dir = clip.url.deletingLastPathComponent()
-        let trimName = "trim_\(Self.timestampFmt.string(from: Date())).wav"
+        let trimName = "trim_\(timestampFmt.string(from: Date())).wav"
         let trimURL = dir.appendingPathComponent(trimName)
         do {
             let outFile = try AVAudioFile(forWriting: trimURL, settings: srcFile.fileFormat.settings,
@@ -2522,7 +2518,7 @@ class AudioManager: ObservableObject {
 
         // Replace clip
         let dur = Double(trimmedFrames) / srcFile.fileFormat.sampleRate
-        let peaks = Self.computePeaks(url: trimURL, count: Theme.clipPeaks)
+        let peaks = computePeaks(url: trimURL, count: Theme.clipPeaks)
         tracks[ti].clips[tracks[ti].clips.count - 1] = TrackClip(url: trimURL, duration: dur, peaks: peaks)
         trackBuffers[ti] = nil
         loadTrackBuffer(ti)
@@ -2561,7 +2557,7 @@ class AudioManager: ObservableObject {
         if wasPlaying { stopTrackLoop(trackIndex) }
 
         let dir = clip.url.deletingLastPathComponent()
-        let ts = Self.timestampFmt.string(from: Date())
+        let ts = timestampFmt.string(from: Date())
 
         // Part A: frames 0..<splitFrame
         srcFile.framePosition = 0
@@ -2587,9 +2583,9 @@ class AudioManager: ObservableObject {
 
         let sr = srcFile.fileFormat.sampleRate
         let clipA = TrackClip(url: urlA, duration: Double(framesA) / sr,
-                              peaks: Self.computePeaks(url: urlA, count: Theme.clipPeaks))
+                              peaks: computePeaks(url: urlA, count: Theme.clipPeaks))
         let clipB = TrackClip(url: urlB, duration: Double(framesB) / sr,
-                              peaks: Self.computePeaks(url: urlB, count: Theme.clipPeaks))
+                              peaks: computePeaks(url: urlB, count: Theme.clipPeaks))
 
         pushUndo()
         tracks[trackIndex].clips.remove(at: clipIndex)
@@ -2615,7 +2611,7 @@ class AudioManager: ObservableObject {
         let dir = clip.url.deletingLastPathComponent()
         let base = clip.url.deletingPathExtension().lastPathComponent
         let ext = clip.url.pathExtension
-        let ts = Self.timestampFmt.string(from: Date())
+        let ts = timestampFmt.string(from: Date())
         let dupURL = dir.appendingPathComponent("\(base)_dup_\(ts).\(ext)")
         do {
             try fm.copyItem(at: clip.url, to: dupURL)
@@ -2623,7 +2619,7 @@ class AudioManager: ObservableObject {
             status = "Duplicate error: \(error.localizedDescription)"; return
         }
 
-        let peaks = Self.computePeaks(url: dupURL, count: Theme.clipPeaks)
+        let peaks = computePeaks(url: dupURL, count: Theme.clipPeaks)
         let newClip = TrackClip(url: dupURL, duration: clip.duration, peaks: peaks,
                                 fadeIn: clip.fadeIn, fadeOut: clip.fadeOut)
         pushUndo()
@@ -2643,7 +2639,7 @@ class AudioManager: ObservableObject {
         }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.wav]
-        panel.nameFieldStringValue = "TRK\(String(format: "%02d", trackIndex + 1))_\(Self.timestampFmt.string(from: Date())).wav"
+        panel.nameFieldStringValue = "TRK\(String(format: "%02d", trackIndex + 1))_\(timestampFmt.string(from: Date())).wav"
         panel.title = "Export Track \(trackIndex + 1)"
         panel.begin { [weak self] response in
             guard response == .OK, let destURL = panel.url else { return }
@@ -2676,7 +2672,7 @@ class AudioManager: ObservableObject {
         }
 
         let duration = Double(file.length) / file.fileFormat.sampleRate
-        let peaks = Self.computePeaks(url: destURL, count: Theme.clipPeaks)
+        let peaks = computePeaks(url: destURL, count: Theme.clipPeaks)
         let clip = TrackClip(url: destURL, duration: duration, peaks: peaks)
         pushUndo()
         tracks[trackIndex].clips.append(clip)
@@ -2764,7 +2760,7 @@ class AudioManager: ObservableObject {
         // Present save panel
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType.wav]
-        panel.nameFieldStringValue = "Mixdown_\(Self.timestampFmt.string(from: Date())).wav"
+        panel.nameFieldStringValue = "Mixdown_\(timestampFmt.string(from: Date())).wav"
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else {
                 DispatchQueue.main.async { self?.bounceStatus = nil }
@@ -2843,29 +2839,6 @@ class AudioManager: ObservableObject {
         let dir = saveLocation.appendingPathComponent("Track \(index + 1)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
-    }
-
-    // Pure: reads `url` and returns `count` peak buckets. Static (no instance state)
-    // so it can be called from a background queue during project load.
-    private static func computePeaks(url: URL, count: Int) -> [Double] {
-        guard let file = try? AVAudioFile(forReading: url) else { return [] }
-        let frames = AVAudioFrameCount(file.length)
-        guard frames > 0,
-              let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames)
-        else { return [] }
-        try? file.read(into: buffer)
-        guard let data = buffer.floatChannelData else { return [] }
-        let n = Int(buffer.frameLength)
-        let step = max(n / count, 1)
-        var result: [Double] = []
-        for i in 0..<count {
-            let start = i * step
-            let end = min(start + step, n)
-            var pk: Float = 0
-            for j in start..<end { pk = max(pk, abs(data[0][j])) }
-            result.append(Double(min(pk, 1)))
-        }
-        return result
     }
 
     // MARK: - Project Save/Load
@@ -3038,7 +3011,7 @@ class AudioManager: ObservableObject {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let built: [(trackIndex: Int, clip: TrackClip)] = plan.map { p in
-                let peaks = Self.computePeaks(url: p.url, count: Theme.clipPeaks)
+                let peaks = computePeaks(url: p.url, count: Theme.clipPeaks)
                 return (p.trackIndex, TrackClip(url: p.url, duration: p.duration, peaks: peaks))
             }
             DispatchQueue.main.async {
