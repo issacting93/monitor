@@ -94,12 +94,9 @@ class AudioManager: ObservableObject {
     @Published var projectName: String = "Untitled"
     @Published var projectDirty: Bool = false
 
-    // Undo/Redo
-    private var undoStack: [[TrackInfo]] = []
-    private var redoStack: [[TrackInfo]] = []
-    private var undoGestureActive: Bool = false   // debounce slider drags
-    var canUndo: Bool { !undoStack.isEmpty }
-    var canRedo: Bool { !redoStack.isEmpty }
+    // Undo/Redo (state + logic live in TransportController)
+    var canUndo: Bool { transport.canUndo }
+    var canRedo: Bool { transport.canRedo }
 
     // Master limiter
     @Published var masterLimiterEnabled: Bool = true
@@ -111,9 +108,6 @@ class AudioManager: ObservableObject {
     var masterMixer:          AVAudioMixerNode?
     private var audioFile:    AVAudioFile?
     private var dryTapMixer:  AVAudioMixerNode?   // pre-FX tap point for dry recording
-    private var playerNodes:     [AVAudioPlayerNode] = []
-    private var trackMixers:     [AVAudioMixerNode] = []
-    private var trackBuffers:    [AVAudioPCMBuffer?] = Array(repeating: nil, count: Theme.trackCount)
 
     // MIDI
     @Published var midiTrackFollow: Bool = true
@@ -149,9 +143,10 @@ class AudioManager: ObservableObject {
     lazy var metronome = MetronomeController(manager: self)
     lazy var device    = DeviceController(manager: self)
     lazy var effects   = EffectsChainController(manager: self)
+    lazy var transport = TransportController(manager: self)
 
     init() {
-        _ = metronome; _ = device; _ = effects
+        _ = metronome; _ = device; _ = effects; _ = transport
         EffectAudioUnit.registerComponent()
         EffectRegistry.shared.registerBuiltIns()
         liveChain = [
@@ -329,8 +324,7 @@ class AudioManager: ObservableObject {
         outMixer     = liveMix
         dryTapMixer  = dryTap
         masterMixer  = master
-        playerNodes  = players
-        trackMixers  = trkMixers
+        transport.attach(players: players, mixers: trkMixers)
         installTrackMeterTaps()
         metronome.attach(player: metPlayer, mixer: metMix, sampleRate: stereoFmt.sampleRate)
         isMonitoring = true
@@ -420,7 +414,7 @@ class AudioManager: ObservableObject {
         effects.clearChainNodes()
         engine = nil
         outMixer = nil; dryTapMixer = nil; masterMixer = nil; masterLimiterNode = nil
-        playerNodes = []; trackMixers = []
+        transport.detach()
     }
 
     // MARK: - Metering
@@ -448,8 +442,9 @@ class AudioManager: ObservableObject {
     }
 
     private func installTrackMeterTaps() {
-        for i in 0..<trackMixers.count {
-            trackMixers[i].installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buf, _ in
+        let mixers = transport.mixers
+        for i in 0..<mixers.count {
+            mixers[i].installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buf, _ in
                 guard let self, let data = buf.floatChannelData else { return }
                 let n = Int(buf.frameLength)
                 guard n > 0 else { return }
@@ -465,7 +460,7 @@ class AudioManager: ObservableObject {
     }
 
     private func removeTrackMeterTaps() {
-        for mixer in trackMixers {
+        for mixer in transport.mixers {
             mixer.removeTap(onBus: 0)
         }
     }
@@ -509,19 +504,7 @@ class AudioManager: ObservableObject {
             }
 
             // Update track loop progress
-            for i in 0..<self.tracks.count where self.tracks[i].isPlaying {
-                if i < self.playerNodes.count, let buffer = self.trackBuffers[i] {
-                    if let nodeTime = self.playerNodes[i].lastRenderTime,
-                       nodeTime.isSampleTimeValid,
-                       let playerTime = self.playerNodes[i].playerTime(forNodeTime: nodeTime) {
-                        let total = Double(buffer.frameLength)
-                        if total > 0 {
-                            let cur = abs(Double(playerTime.sampleTime)).truncatingRemainder(dividingBy: total)
-                            self.tracks[i].loopProgress = cur / total
-                        }
-                    }
-                }
-            }
+            self.transport.updatePlaybackProgress()
         }
     }
 
@@ -557,6 +540,60 @@ class AudioManager: ObservableObject {
         quantizeMode = (quantizeMode + 1) % Self.quantizeLabels.count
     }
 
+    // MARK: - Transport (forwarders — behaviour lives in TransportController)
+
+    func setLoopEnabled(_ enabled: Bool) { transport.setLoopEnabled(enabled) }
+
+    func startTrackLoop(_ i: Int) { transport.startTrackLoop(i) }
+
+    func toggleTrackPlayback(_ i: Int) { transport.toggleTrackPlayback(i) }
+
+    func toggleTrackRecord(_ i: Int) { transport.toggleTrackRecord(i) }
+
+    func playAll() { transport.playAll() }
+
+    func stopAll() { transport.stopAll() }
+
+    func beginUndoGesture() { transport.beginUndoGesture() }
+
+    func endUndoGesture() { transport.endUndoGesture() }
+
+    func undo() { transport.undo() }
+
+    func redo() { transport.redo() }
+
+    func clearAll() { transport.clearAll() }
+
+    func openTrimEditor(_ trackIndex: Int) { transport.openTrimEditor(trackIndex) }
+
+    func cancelTrim() { transport.cancelTrim() }
+
+    func applyTrim() { transport.applyTrim() }
+
+    func splitClipAtPlayhead(_ trackIndex: Int) { transport.splitClipAtPlayhead(trackIndex) }
+
+    func duplicateClip(_ trackIndex: Int, clipIndex: Int? = nil) {
+        transport.duplicateClip(trackIndex, clipIndex: clipIndex)
+    }
+
+    func exportTrack(_ trackIndex: Int) { transport.exportTrack(trackIndex) }
+
+    func importAudioFile(_ url: URL, toTrack trackIndex: Int) {
+        transport.importAudioFile(url, toTrack: trackIndex)
+    }
+
+    func changeSaveLocation() { transport.changeSaveLocation() }
+
+    func bounceMixdown() { transport.bounceMixdown() }
+
+    func toggleMute(_ i: Int) { transport.toggleMute(i) }
+
+    func toggleSolo(_ i: Int) { transport.toggleSolo(i) }
+
+    func setTrackVolume(_ i: Int, _ v: Double) { transport.setTrackVolume(i, v) }
+
+    func setTrackPan(_ i: Int, _ p: Double) { transport.setTrackPan(i, p) }
+
     // MARK: - Recording
 
     func startRecording() {
@@ -585,7 +622,7 @@ class AudioManager: ObservableObject {
         guard engine != nil, let dryTap = dryTapMixer else { return }
         let fmt  = dryTap.outputFormat(forBus: 0)
         let name = "take_\(timestampFmt.string(from: Date())).wav"
-        let url  = trackFolder(selectedTrack).appendingPathComponent(name)
+        let url  = transport.trackFolder(selectedTrack).appendingPathComponent(name)
         do {
             audioFile = try AVAudioFile(forWriting: url, settings: fmt.settings,
                                         commonFormat: .pcmFormatFloat32, interleaved: false)
@@ -627,195 +664,11 @@ class AudioManager: ObservableObject {
 
         status = "Saved \(u.lastPathComponent) → TRK \(String(format: "%02d", trk + 1))"
         DispatchQueue.main.async {
-            self.pushUndo()
+            self.transport.pushUndo()
             self.recordings.append(rec)
             self.tracks[trk].clips.append(clip)
-            self.loadTrackBuffer(trk)
+            self.transport.loadTrackBuffer(trk)
         }
-    }
-
-    // MARK: - Per-Track Playback
-
-    // Toggles loop mode and re-schedules any currently-playing tracks so the change
-    // takes effect immediately instead of at the next play.
-    func setLoopEnabled(_ enabled: Bool) {
-        guard enabled != loopEnabled else { return }
-        loopEnabled = enabled
-        for i in 0..<tracks.count where tracks[i].isPlaying {
-            guard let buffer = trackBuffers[i] else { continue }
-            scheduleTrackBuffer(i, buffer: buffer)
-        }
-        projectDirty = true
-    }
-
-    // Bumped on every (re)schedule so a stale one-shot completion handler can't stop
-    // a later playback of the same track.
-    private var playGenerations = [Int](repeating: 0, count: Theme.trackCount)
-
-    // Schedules a track's buffer respecting `loopEnabled`: loop mode repeats forever,
-    // one-shot mode plays once and marks the track stopped (on main) when it ends.
-    private func scheduleTrackBuffer(_ i: Int, buffer: AVAudioPCMBuffer) {
-        guard i < playerNodes.count else { return }
-        let player = playerNodes[i]
-        player.stop()
-        if loopEnabled {
-            player.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
-        } else {
-            playGenerations[i] += 1
-            let gen = playGenerations[i]
-            player.scheduleBuffer(buffer, at: nil, options: [], completionHandler: { [weak self] in
-                DispatchQueue.main.async {
-                    guard let self, gen == self.playGenerations[i] else { return }
-                    self.stopTrackLoop(i)
-                }
-            })
-        }
-        player.play()
-    }
-
-    func startTrackLoop(_ i: Int) {
-        guard isMonitoring, i < playerNodes.count else { return }
-        if trackBuffers[i] == nil {
-            // Buffer not decoded yet — load it off-main, then start once it's ready.
-            loadTrackBuffer(i) { [weak self] in self?.startTrackLoop(i) }
-            return
-        }
-        guard let buffer = trackBuffers[i] else { return }
-        scheduleTrackBuffer(i, buffer: buffer)
-        tracks[i].isPlaying = true
-        refreshTrackMixers()
-        if metronomeEnabled && !metronome.isRunning { metronome.start() }
-        isPlaying = true
-        status = "Looping TRK \(String(format: "%02d", i + 1))"
-    }
-
-    func stopTrackLoop(_ i: Int) {
-        guard i < playerNodes.count else { return }
-        playGenerations[i] += 1
-        playerNodes[i].stop()
-        tracks[i].isPlaying = false
-        tracks[i].loopProgress = 0
-        if !tracks.contains(where: { $0.isPlaying }) {
-            metronome.stop()
-            isPlaying = false
-            status = "Stopped"
-        }
-    }
-
-    func toggleTrackPlayback(_ i: Int) {
-        if tracks[i].isPlaying { stopTrackLoop(i) } else { startTrackLoop(i) }
-    }
-
-    func toggleTrackRecord(_ i: Int) {
-        selectedTrack = i
-        if countingIn {
-            // Count-in is pending (isRecording is still false) — cancel it instead
-            // of starting a second recording on top of the scheduled one.
-            stopRecording()
-        } else if isRecording {
-            stopRecording()
-            startTrackLoop(i)
-        } else {
-            startRecording()
-        }
-    }
-
-    func playAll() {
-        guard isMonitoring else { return }
-        // Decode any missing buffers off-main first, then re-enter to schedule.
-        let missing = (0..<tracks.count).filter { !tracks[$0].clips.isEmpty && trackBuffers[$0] == nil }
-        if !missing.isEmpty {
-            let group = DispatchGroup()
-            for i in missing {
-                group.enter()
-                loadTrackBuffer(i) { group.leave() }
-            }
-            group.notify(queue: .main) { [weak self] in self?.playAll() }
-            return
-        }
-        for i in 0..<tracks.count where !tracks[i].clips.isEmpty {
-            guard let buffer = trackBuffers[i] else { continue }
-            scheduleTrackBuffer(i, buffer: buffer)
-            tracks[i].isPlaying = true
-        }
-        refreshTrackMixers()
-        isPlaying = true
-        metronome.start()
-        status = "Playing all tracks"
-    }
-
-    func stopAll() {
-        metronome.stop()
-        for i in 0..<tracks.count {
-            if i < playerNodes.count { playerNodes[i].stop() }
-            tracks[i].isPlaying = false
-            tracks[i].loopProgress = 0
-        }
-        isPlaying = false
-        status = "Stopped"
-    }
-
-    // MARK: - Undo/Redo
-
-    func pushUndo() {
-        undoStack.append(tracks)
-        redoStack.removeAll()
-        if undoStack.count > 30 { undoStack.removeFirst() }
-        projectDirty = true
-    }
-
-    /// Push undo only once per gesture (for sliders/continuous controls).
-    func beginUndoGesture() { undoGestureActive = false }
-    func pushUndoIfNeeded() {
-        if !undoGestureActive {
-            undoGestureActive = true
-            pushUndo()
-        }
-    }
-    func endUndoGesture() { undoGestureActive = false }
-
-    func undo() {
-        guard let snapshot = undoStack.popLast() else { return }
-        redoStack.append(tracks)
-        if redoStack.count > 30 { redoStack.removeFirst() }
-        restoreTracks(snapshot)
-        status = "Undo"
-    }
-
-    func redo() {
-        guard let snapshot = redoStack.popLast() else { return }
-        undoStack.append(tracks)
-        if undoStack.count > 30 { undoStack.removeFirst() }
-        restoreTracks(snapshot)
-        status = "Redo"
-    }
-
-    private func restoreTracks(_ snapshot: [TrackInfo]) {
-        for i in 0..<tracks.count {
-            if tracks[i].isPlaying && i < playerNodes.count {
-                playerNodes[i].stop()
-            }
-        }
-        tracks = snapshot
-        for i in 0..<tracks.count {
-            trackBuffers[i] = nil
-            if !tracks[i].clips.isEmpty { loadTrackBuffer(i) }
-            tracks[i].isPlaying = false
-            tracks[i].loopProgress = 0
-        }
-        isPlaying = false
-        refreshTrackMixers()
-    }
-
-    func clearAll() {
-        pushUndo()
-        stopAll()
-        for i in 0..<tracks.count {
-            tracks[i].clips.removeAll()
-            trackBuffers[i] = nil
-        }
-        recordings.removeAll()
-        status = "All tracks cleared"
     }
 
     // MARK: - Timeline Zoom
@@ -828,372 +681,6 @@ class AudioManager: ObservableObject {
         timelineZoom = max(0.5, timelineZoom / 1.25)
     }
 
-    // MARK: - Trim Editor
-
-    func openTrimEditor(_ trackIndex: Int) {
-        guard trackIndex < tracks.count, let clip = tracks[trackIndex].clips.last else { return }
-        if tracks[trackIndex].isPlaying { stopTrackLoop(trackIndex) }
-        trimClipDuration = clip.duration
-        trimPeaks = computePeaks(url: clip.url, count: 256)
-        trimStart = 0
-        trimEnd = 1
-        trimmingTrack = trackIndex
-    }
-
-    func cancelTrim() {
-        trimmingTrack = nil
-        trimPeaks = []
-    }
-
-    func applyTrim() {
-        guard let ti = trimmingTrack, ti < tracks.count, let clip = tracks[ti].clips.last else { return }
-        pushUndo()
-        guard let srcFile = try? AVAudioFile(forReading: clip.url) else { return }
-        let totalFrames = Int64(srcFile.length)
-        let startFrame = Int64(trimStart * Double(totalFrames))
-        let endFrame = Int64(trimEnd * Double(totalFrames))
-        let trimmedFrames = AVAudioFrameCount(max(0, endFrame - startFrame))
-        guard trimmedFrames > 0 else { return }
-
-        // Read the source region
-        srcFile.framePosition = startFrame
-        guard let readBuf = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: trimmedFrames) else { return }
-        do { try srcFile.read(into: readBuf, frameCount: trimmedFrames) } catch { return }
-
-        // Write trimmed file
-        let dir = clip.url.deletingLastPathComponent()
-        let trimName = "trim_\(timestampFmt.string(from: Date())).wav"
-        let trimURL = dir.appendingPathComponent(trimName)
-        do {
-            let outFile = try AVAudioFile(forWriting: trimURL, settings: srcFile.fileFormat.settings,
-                                           commonFormat: .pcmFormatFloat32, interleaved: false)
-            try outFile.write(from: readBuf)
-        } catch { status = "Trim error: \(error.localizedDescription)"; return }
-
-        // Replace clip
-        let dur = Double(trimmedFrames) / srcFile.fileFormat.sampleRate
-        let peaks = computePeaks(url: trimURL, count: Theme.clipPeaks)
-        tracks[ti].clips[tracks[ti].clips.count - 1] = TrackClip(url: trimURL, duration: dur, peaks: peaks)
-        trackBuffers[ti] = nil
-        loadTrackBuffer(ti)
-        trimmingTrack = nil
-        trimPeaks = []
-        status = "Trimmed → \(trimName)"
-    }
-
-    // MARK: - Split & Duplicate
-
-    func splitClipAtPlayhead(_ trackIndex: Int) {
-        guard trackIndex < tracks.count, !tracks[trackIndex].clips.isEmpty else {
-            status = "No clip to split on TRK \(String(format: "%02d", trackIndex + 1))"
-            return
-        }
-        let progress = tracks[trackIndex].loopProgress
-        guard progress > 0.001 && progress < 0.999 else {
-            status = "Move playhead inside clip to split"
-            return
-        }
-
-        let clipIndex = tracks[trackIndex].clips.count - 1
-        let clip = tracks[trackIndex].clips[clipIndex]
-        guard let srcFile = try? AVAudioFile(forReading: clip.url) else {
-            status = "Cannot read clip file"; return
-        }
-        let totalFrames = Int64(srcFile.length)
-        let splitFrame = Int64(progress * Double(totalFrames))
-        let framesA = AVAudioFrameCount(splitFrame)
-        let framesB = AVAudioFrameCount(totalFrames - splitFrame)
-        guard framesA > 0 && framesB > 0 else {
-            status = "Split point too close to edge"; return
-        }
-
-        let wasPlaying = tracks[trackIndex].isPlaying
-        if wasPlaying { stopTrackLoop(trackIndex) }
-
-        let dir = clip.url.deletingLastPathComponent()
-        let ts = timestampFmt.string(from: Date())
-
-        // Part A: frames 0..<splitFrame
-        srcFile.framePosition = 0
-        guard let bufA = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: framesA) else { return }
-        do { try srcFile.read(into: bufA, frameCount: framesA) } catch { status = "Split read error"; return }
-        let urlA = dir.appendingPathComponent("split_A_\(ts).wav")
-        do {
-            let outA = try AVAudioFile(forWriting: urlA, settings: srcFile.fileFormat.settings,
-                                       commonFormat: .pcmFormatFloat32, interleaved: false)
-            try outA.write(from: bufA)
-        } catch { status = "Split write error: \(error.localizedDescription)"; return }
-
-        // Part B: frames splitFrame..<totalFrames
-        srcFile.framePosition = splitFrame
-        guard let bufB = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: framesB) else { return }
-        do { try srcFile.read(into: bufB, frameCount: framesB) } catch { status = "Split read error"; return }
-        let urlB = dir.appendingPathComponent("split_B_\(ts).wav")
-        do {
-            let outB = try AVAudioFile(forWriting: urlB, settings: srcFile.fileFormat.settings,
-                                       commonFormat: .pcmFormatFloat32, interleaved: false)
-            try outB.write(from: bufB)
-        } catch { status = "Split write error: \(error.localizedDescription)"; return }
-
-        let sr = srcFile.fileFormat.sampleRate
-        let clipA = TrackClip(url: urlA, duration: Double(framesA) / sr,
-                              peaks: computePeaks(url: urlA, count: Theme.clipPeaks))
-        let clipB = TrackClip(url: urlB, duration: Double(framesB) / sr,
-                              peaks: computePeaks(url: urlB, count: Theme.clipPeaks))
-
-        pushUndo()
-        tracks[trackIndex].clips.remove(at: clipIndex)
-        tracks[trackIndex].clips.insert(clipA, at: clipIndex)
-        tracks[trackIndex].clips.insert(clipB, at: clipIndex + 1)
-
-        trackBuffers[trackIndex] = nil
-        loadTrackBuffer(trackIndex)
-        projectDirty = true
-        status = "Split TRK \(String(format: "%02d", trackIndex + 1)) at \(Int(progress * 100))%"
-    }
-
-    func duplicateClip(_ trackIndex: Int, clipIndex: Int? = nil) {
-        guard trackIndex < tracks.count, !tracks[trackIndex].clips.isEmpty else {
-            status = "No clip to duplicate on TRK \(String(format: "%02d", trackIndex + 1))"
-            return
-        }
-        let ci = clipIndex ?? (tracks[trackIndex].clips.count - 1)
-        guard ci >= 0 && ci < tracks[trackIndex].clips.count else { return }
-        let clip = tracks[trackIndex].clips[ci]
-
-        let fm = FileManager.default
-        let dir = clip.url.deletingLastPathComponent()
-        let base = clip.url.deletingPathExtension().lastPathComponent
-        let ext = clip.url.pathExtension
-        let ts = timestampFmt.string(from: Date())
-        let dupURL = dir.appendingPathComponent("\(base)_dup_\(ts).\(ext)")
-        do {
-            try fm.copyItem(at: clip.url, to: dupURL)
-        } catch {
-            status = "Duplicate error: \(error.localizedDescription)"; return
-        }
-
-        let peaks = computePeaks(url: dupURL, count: Theme.clipPeaks)
-        let newClip = TrackClip(url: dupURL, duration: clip.duration, peaks: peaks,
-                                fadeIn: clip.fadeIn, fadeOut: clip.fadeOut)
-        pushUndo()
-        tracks[trackIndex].clips.insert(newClip, at: ci + 1)
-        trackBuffers[trackIndex] = nil
-        loadTrackBuffer(trackIndex)
-        projectDirty = true
-        status = "Duplicated clip → \(dupURL.lastPathComponent)"
-    }
-
-    // MARK: - Export
-
-    func exportTrack(_ trackIndex: Int) {
-        guard trackIndex < tracks.count, let clip = tracks[trackIndex].clips.last else {
-            status = "No clip to export on TRK \(String(format: "%02d", trackIndex + 1))"
-            return
-        }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.wav]
-        panel.nameFieldStringValue = "TRK\(String(format: "%02d", trackIndex + 1))_\(timestampFmt.string(from: Date())).wav"
-        panel.title = "Export Track \(trackIndex + 1)"
-        panel.begin { [weak self] response in
-            guard response == .OK, let destURL = panel.url else { return }
-            do {
-                try FileManager.default.copyItem(at: clip.url, to: destURL)
-                DispatchQueue.main.async { self?.status = "Exported → \(destURL.lastPathComponent)" }
-            } catch {
-                DispatchQueue.main.async { self?.status = "Export error: \(error.localizedDescription)" }
-            }
-        }
-    }
-
-    func importAudioFile(_ url: URL, toTrack trackIndex: Int) {
-        guard trackIndex < tracks.count else { return }
-        let fm = FileManager.default
-
-        // Validate it's a readable audio file
-        guard let file = try? AVAudioFile(forReading: url) else {
-            status = "Cannot read audio file: \(url.lastPathComponent)"
-            return
-        }
-
-        // Copy into track directory
-        let trackDir = saveLocation.appendingPathComponent("Track \(String(format: "%02d", trackIndex + 1))")
-        try? fm.createDirectory(at: trackDir, withIntermediateDirectories: true)
-        let destURL = trackDir.appendingPathComponent(url.lastPathComponent)
-        if !fm.fileExists(atPath: destURL.path) {
-            do { try fm.copyItem(at: url, to: destURL) }
-            catch { status = "Import error: \(error.localizedDescription)"; return }
-        }
-
-        let duration = Double(file.length) / file.fileFormat.sampleRate
-        let peaks = computePeaks(url: destURL, count: Theme.clipPeaks)
-        let clip = TrackClip(url: destURL, duration: duration, peaks: peaks)
-        pushUndo()
-        tracks[trackIndex].clips.append(clip)
-        loadTrackBuffer(trackIndex)
-        projectDirty = true
-        status = "Imported \(url.lastPathComponent) → TRK \(String(format: "%02d", trackIndex + 1))"
-    }
-
-    func changeSaveLocation() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.title = "Choose Save Location"
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else { return }
-            DispatchQueue.main.async {
-                self?.saveLocation = url
-                self?.status = "Save location → \(url.path)"
-            }
-        }
-    }
-
-    // MARK: - Mixdown Export
-
-    func bounceMixdown() {
-        let anySolo = tracks.contains { $0.solo }
-        // Collect audible tracks with audio
-        var sources: [(buffer: AVAudioPCMBuffer, volume: Float, pan: Float)] = []
-        for (_, t) in tracks.enumerated() {
-            let audible = t.solo || (!anySolo && !t.muted)
-            guard audible, let clip = t.clips.last else { continue }
-            guard let file = try? AVAudioFile(forReading: clip.url) else { continue }
-            let frames = AVAudioFrameCount(file.length)
-            guard let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { continue }
-            do { try file.read(into: buf) } catch { continue }
-            sources.append((buf, Float(t.volume), Float(t.pan)))
-        }
-        guard !sources.isEmpty else { status = "No audible tracks to bounce"; return }
-
-        // Find the longest track duration
-        let maxFrames = sources.map { Int($0.buffer.frameLength) }.max()!
-        let fmt = sources[0].buffer.format
-        let sr = fmt.sampleRate
-        let channels = Int(fmt.channelCount)
-
-        guard let outBuf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(maxFrames)) else { return }
-        outBuf.frameLength = AVAudioFrameCount(maxFrames)
-
-        // Zero the output
-        for ch in 0..<channels {
-            let ptr = outBuf.floatChannelData![ch]
-            for f in 0..<maxFrames { ptr[f] = 0 }
-        }
-
-        bounceStatus = "Mixing..."
-
-        // Mix each source into the output
-        for src in sources {
-            let srcLen = Int(src.buffer.frameLength)
-            let vol = src.volume
-            // Simple equal-power pan: left = cos(angle), right = sin(angle)
-            let angle = (src.pan + 1.0) * 0.5 * Float.pi * 0.5  // 0..pi/2
-            let gainL = vol * cosf(angle)
-            let gainR = vol * sinf(angle)
-            let gains = channels >= 2 ? [gainL, gainR] : [vol]
-
-            for ch in 0..<min(channels, 2) {
-                let outPtr = outBuf.floatChannelData![ch]
-                let srcPtr = src.buffer.floatChannelData![min(ch, Int(src.buffer.format.channelCount) - 1)]
-                let g = gains[ch]
-                for f in 0..<maxFrames {
-                    let srcFrame = f % srcLen  // loop shorter tracks
-                    outPtr[f] += srcPtr[srcFrame] * g
-                }
-            }
-        }
-
-        // Soft-clip via tanh to prevent digital overs
-        for ch in 0..<channels {
-            let ptr = outBuf.floatChannelData![ch]
-            for f in 0..<maxFrames { ptr[f] = tanhf(ptr[f]) }
-        }
-
-        // Present save panel
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [UTType.wav]
-        panel.nameFieldStringValue = "Mixdown_\(timestampFmt.string(from: Date())).wav"
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else {
-                DispatchQueue.main.async { self?.bounceStatus = nil }
-                return
-            }
-            do {
-                let settings: [String: Any] = [
-                    AVFormatIDKey: kAudioFormatLinearPCM,
-                    AVSampleRateKey: sr,
-                    AVNumberOfChannelsKey: channels,
-                    AVLinearPCMBitDepthKey: 32,
-                    AVLinearPCMIsFloatKey: true,
-                    AVLinearPCMIsNonInterleaved: true,
-                ]
-                let outFile = try AVAudioFile(forWriting: url, settings: settings,
-                                               commonFormat: .pcmFormatFloat32, interleaved: false)
-                try outFile.write(from: outBuf)
-                DispatchQueue.main.async {
-                    self?.bounceStatus = nil
-                    self?.status = "Mixdown exported → \(url.lastPathComponent)"
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self?.bounceStatus = nil
-                    self?.status = "Mixdown error: \(error.localizedDescription)"
-                }
-            }
-        }
-    }
-
-    // MARK: - Track Helpers
-
-    func toggleMute(_ i: Int) { pushUndo(); tracks[i].muted.toggle(); refreshTrackMixers() }
-    func toggleSolo(_ i: Int) { pushUndo(); tracks[i].solo.toggle(); refreshTrackMixers() }
-    func setTrackVolume(_ i: Int, _ v: Double) { pushUndoIfNeeded(); tracks[i].volume = v; refreshTrackMixers() }
-    func setTrackPan(_ i: Int, _ p: Double) { pushUndoIfNeeded(); tracks[i].pan = p; refreshTrackMixers() }
-
-    private func refreshTrackMixers() {
-        let anySolo = tracks.contains { $0.solo }
-        for i in 0..<tracks.count where i < trackMixers.count {
-            let t = tracks[i]
-            let audible = t.solo || (!anySolo && !t.muted)
-            trackMixers[i].outputVolume = audible ? Float(t.volume) : 0
-            trackMixers[i].pan = Float(t.pan)
-        }
-    }
-
-    // Decodes the track's last clip off the main thread (long recordings are tens of
-    // MB), then publishes the buffer back on main. `completion` runs on the main
-    // thread once the buffer is ready (or immediately if there was nothing to load),
-    // so playback callers can defer scheduling until the read finishes.
-    private func loadTrackBuffer(_ i: Int, completion: (() -> Void)? = nil) {
-        guard i < tracks.count, let lastClip = tracks[i].clips.last else {
-            completion?()
-            return
-        }
-        let url = lastClip.url
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var loaded: AVAudioPCMBuffer?
-            if let file = try? AVAudioFile(forReading: url) {
-                let frames = AVAudioFrameCount(file.length)
-                if let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) {
-                    try? file.read(into: buffer)
-                    loaded = buffer
-                }
-            }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if let loaded, i < self.trackBuffers.count { self.trackBuffers[i] = loaded }
-                completion?()
-            }
-        }
-    }
-
-    private func trackFolder(_ index: Int) -> URL {
-        let dir = saveLocation.appendingPathComponent("Track \(index + 1)")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
 
     // MARK: - Project Save/Load
 
@@ -1391,11 +878,11 @@ class AudioManager: ObservableObject {
             newTracks[item.trackIndex].clips.append(item.clip)
         }
         tracks = newTracks
-        trackBuffers = Array(repeating: nil, count: Theme.trackCount)
+        transport.resetTrackBuffers()
 
         // Load track buffers for tracks that have clips
         for i in 0..<tracks.count where !tracks[i].clips.isEmpty {
-            loadTrackBuffer(i)
+            transport.loadTrackBuffer(i)
         }
 
         // Restore effect chain
@@ -1412,7 +899,7 @@ class AudioManager: ObservableObject {
             stopMonitoring()
             startMonitoring()
         }
-        refreshTrackMixers()
+        transport.refreshTrackMixers()
 
         projectURL = packageURL
         projectName = packageURL.deletingPathExtension().lastPathComponent
