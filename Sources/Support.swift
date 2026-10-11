@@ -6,6 +6,19 @@
 
 import Foundation
 import AVFoundation
+import os
+
+// Small reference-type mutex for state shared between the audio render thread and the
+// main/background threads. Held only for short, non-blocking critical sections (a few
+// assignments, or a small copy) — never across file or device I/O.
+final class UnfairLock {
+    private var _lock = os_unfair_lock_s()
+    func withLock<R>(_ body: () -> R) -> R {
+        os_unfair_lock_lock(&_lock)
+        defer { os_unfair_lock_unlock(&_lock) }
+        return body()
+    }
+}
 
 let timestampFmt: DateFormatter = {
     let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"; return f

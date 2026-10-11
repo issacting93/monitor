@@ -18,6 +18,18 @@ final class EngineController {
     private var dryTapMixer:     AVAudioMixerNode?   // pre-FX tap point for dry recording
     private var masterLimiterNode: AVAudioUnitEffect?
 
+    // Async kernel-insert pipeline. `AVAudioUnit.instantiate` is asynchronous and an
+    // AUAudioUnit subclass can't take init arguments, so the factory + sample rate are
+    // passed via process-wide statics on EffectAudioUnit. To keep that safe we allow at
+    // most ONE instantiation in flight process-wide (pumpKernelQueue refuses to start a
+    // second), and tag each graph build with an epoch so a completion from a torn-down or
+    // restarted graph is discarded rather than attaching to a dead engine or clobbering a
+    // newer build's statics.
+    private var kernelEpoch = 0
+    private var pendingKernels: [(slot: ChainSlot, mod: EffectModule)] = []
+    private var pendingSampleRate: Double = 0
+    private var instantiationInFlight = false
+
     init(manager: AudioManager) {
         self.manager = manager
     }
@@ -26,6 +38,11 @@ final class EngineController {
 
     func start() {
         let m = manager
+        // Guard against a second graph: some call sites (e.g. the Monitor device picker)
+        // call start() while already monitoring. Without this, start() would build a second
+        // AVAudioEngine and leak the first, leaving two live graphs (doubled audio).
+        if m.isMonitoring { stop() }
+        kernelEpoch &+= 1   // invalidate any in-flight kernel insert from a prior graph
         if m.inputDevices.isEmpty { m.device.loadDevices() }
 
         // Request mic permission off the main thread before touching the audio engine
@@ -180,28 +197,47 @@ final class EngineController {
 
         // Async-insert kernel-based modules. AVAudioUnit instantiation is async and
         // AUAudioUnit subclasses can't take init arguments, so the kernel factory and
-        // sample rate are passed via process-wide statics. Instantiate one at a time:
-        // otherwise a later slot overwrites the static before an earlier instantiation
-        // completes, and every kernel ends up with the last module's DSP.
-        instantiateKernels(Array(pendingKernelSlots), sampleRate: stereoFmt.sampleRate)
+        // sample rate are passed via process-wide statics. See pumpKernelQueue for how
+        // that shared state is kept safe across graph rebuilds.
+        enqueueKernels(pendingKernelSlots, sampleRate: stereoFmt.sampleRate)
     }
 
-    private func instantiateKernels(_ pending: [(index: Int, slot: ChainSlot, mod: EffectModule)],
-                                    sampleRate: Double) {
-        guard let head = pending.first else { return }
-        let rest = Array(pending.dropFirst())
+    private func enqueueKernels(_ slots: [(index: Int, slot: ChainSlot, mod: EffectModule)],
+                                sampleRate: Double) {
+        pendingKernels = slots.map { (slot: $0.slot, mod: $0.mod) }
+        pendingSampleRate = sampleRate
+        pumpKernelQueue()
+    }
+
+    // Instantiates the head pending kernel, one at a time. This is the ONLY place that
+    // writes the process-wide EffectAudioUnit statics, and it refuses to run while an
+    // instantiation is in flight — so the statics are never overwritten before their
+    // own instantiation has consumed them. Each completion re-pumps, so the queue drains
+    // serially; a completion whose epoch is stale (graph restarted) is dropped.
+    private func pumpKernelQueue() {
+        guard !instantiationInFlight, !pendingKernels.isEmpty else { return }
+        let head = pendingKernels[0]
         guard let factory = head.mod.makeKernel else {
-            instantiateKernels(rest, sampleRate: sampleRate)
+            pendingKernels.removeFirst()
+            pumpKernelQueue()
             return
         }
+        let epoch = kernelEpoch
+        instantiationInFlight = true
         EffectAudioUnit.pendingKernelFactory = factory
-        EffectAudioUnit.pendingSampleRate = sampleRate
+        EffectAudioUnit.pendingSampleRate = pendingSampleRate
         AVAudioUnit.instantiate(with: EffectAudioUnit.componentDesc, options: .loadInProcess) { [weak self] unit, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 EffectAudioUnit.pendingKernelFactory = nil
-                if let kernelNode = unit, self.manager.isMonitoring,
-                   let eng = self.engine, let liveMix = self.outMixer {
+                self.instantiationInFlight = false
+
+                let stale = (epoch != self.kernelEpoch)
+                if stale {
+                    // Pipeline was restarted: `pendingKernels` already belongs to the new
+                    // build, so leave it untouched and just let the next pump drain it.
+                } else if let kernelNode = unit, self.manager.isMonitoring,
+                          let eng = self.engine, let liveMix = self.outMixer {
                     let fmt = liveMix.outputFormat(forBus: 0)
                     // Insert after the last chain node, or after dryTapMixer
                     let insertAfter: AVAudioNode
@@ -215,8 +251,12 @@ final class EngineController {
                     kernelNode.auAudioUnit.shouldBypassEffect = !head.slot.enabled
                     for (pid, val) in head.slot.parameters { head.mod.applyParameter?(kernelNode, pid, val) }
                     self.manager.effects.appendChainNode(id: head.slot.id, node: kernelNode)
+                    self.pendingKernels.removeFirst()
+                } else {
+                    // Live graph gone but not superseded — drop the head and continue.
+                    self.pendingKernels.removeFirst()
                 }
-                self.instantiateKernels(rest, sampleRate: sampleRate)
+                self.pumpKernelQueue()
             }
         }
     }
@@ -233,6 +273,8 @@ final class EngineController {
 
     private func teardown() {
         let m = manager
+        kernelEpoch &+= 1        // discard any in-flight kernel insert for this graph
+        pendingKernels.removeAll()
         m.metronome.detach()
         m.meter.detach()
         m.recorder.detach()

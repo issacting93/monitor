@@ -111,6 +111,12 @@ final class EffectAudioUnit: AUAudioUnit {
     private var _inputBusArray: AUAudioUnitBusArray!
     private var _outputBusArray: AUAudioUnitBusArray!
 
+    // Serialises main-thread parameter writes (`setKernelParameter`) against the
+    // render-thread `process()` call, so a knob move can't tear a value the DSP is
+    // mid-read of. The render thread only ever waits for the few instructions of a
+    // parameter switch; parameter writes block for at most one buffer of DSP.
+    private let renderLock = UnfairLock()
+
     static var pendingKernelFactory: ((Double) -> any AudioEffectKernel)?
     // Sample rate for the next instantiation. Set alongside pendingKernelFactory
     // (AUAudioUnit subclasses can't receive init arguments through instantiate()).
@@ -138,6 +144,7 @@ final class EffectAudioUnit: AUAudioUnit {
 
     override var internalRenderBlock: AUInternalRenderBlock {
         let kern = self.kernel
+        let lock = self.renderLock
         return { actionFlags, timestamp, frameCount, outputBusNumber, outputData, _, pullInputBlock in
             guard let pullInputBlock = pullInputBlock else { return noErr }
             let status = pullInputBlock(actionFlags, timestamp, frameCount, outputBusNumber, outputData)
@@ -145,13 +152,13 @@ final class EffectAudioUnit: AUAudioUnit {
 
             let abl = UnsafeMutableAudioBufferListPointer(outputData)
             let ptrs = abl.compactMap { $0.mData?.assumingMemoryBound(to: Float.self) }
-            kern.process(ptrs, frames: Int(frameCount))
+            lock.withLock { kern.process(ptrs, frames: Int(frameCount)) }
             return noErr
         }
     }
 
     func setKernelParameter(_ id: String, value: Float) {
-        kernel.setParameter(id, value: value)
+        renderLock.withLock { kernel.setParameter(id, value: value) }
     }
 
     // Component description for custom kernels

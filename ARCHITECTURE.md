@@ -1,0 +1,318 @@
+# TAPE 08 — Functionality & System Architecture
+
+A single-window macOS app for monitoring, recording and looping the **Teenage Engineering OP-XY**
+over USB audio, with a multitrack tape-style looper and a modular effects chain.
+
+- **Platform:** macOS 14.0+, arm64
+- **UI:** SwiftUI
+- **Audio:** AVFoundation (`AVAudioEngine`) + CoreAudio (device layer) + CoreMIDI (track follow)
+- **Source:** 17 files in `Sources/`, ~6,230 lines
+- **Two build paths:** `package.sh` (head-less `swiftc`) and the Xcode project `Tape08/`
+
+This document describes *what the app does* and *how it is built*, as it exists today. The
+developer-facing "how do I build/run it" lives in [README.md](README.md); review findings and
+open work live in [to_fix.md](to_fix.md); product intent lives in
+[`OP-XY Monitor multitrack product plan.md`](OP-XY%20Monitor%20multitrack%20product%20plan.md).
+
+---
+
+## 1. Feature inventory
+
+### 1.1 Device I/O and monitoring
+- Enumerates all CoreAudio input/output devices (name + channel counts), auto-selects a device
+  whose name contains "XY"/"OP" as the default input, and the current system output as default out.
+- Live monitoring: input is routed through the effect chain to the output with input/output gain
+  and a master peak limiter.
+- The engine points its own input AUHAL at the selected device **without** changing the system
+  default input, so other apps keep their input.
+- Warns about feedback when the built-in mic and built-in speakers are both in play.
+
+### 1.2 Metering
+- Post-FX stereo RMS meter with smoothing, peak-hold, and a dB readout.
+- A 200-bucket scrolling waveform for the Monitor view.
+- Per-track level meters (8 tracks).
+- Metering is render-thread safe: taps publish raw levels into a lock-guarded snapshot; all
+  smoothing/peak-hold happens on a 60 Hz main-thread timer.
+
+### 1.3 Multitrack looper
+- **8 tracks**, each an ordered list of **clips** ("takes"); multiple takes layer per track.
+- Per track: play/stop, volume, pan, mute, solo, level meter.
+- **Loop** playback (repeat forever) or **one-shot** (play once, stop) — toggled globally.
+- Play-all / stop-all, per-track loop, selected-track model (drives FX chain, recording, edits).
+- Playhead progress per track, driving the timeline playhead and scroll-follow.
+
+### 1.4 Recording
+- Captures the **dry** (pre-FX) signal to a WAV under the save location.
+- Optional **count-in** (0 / 1 / 2 / 4 bars) before recording starts.
+- Elapsed-time display; on stop the take becomes a new clip on the selected track.
+- Recording/f FX: takes are dry by design; effects are heard live but not printed.
+
+### 1.5 Metronome & tempo
+- Sample-accurate click scheduling (queued ~2 s ahead by frame, not by timer).
+- Accent on every 4th beat; independent click volume; enable toggle.
+- **Tap tempo** (8-tap average, 40–300 BPM clamp); manual ± 1 BPM.
+
+### 1.6 Clip editing & export
+- **Trim** editor with draggable in/out handles and a waveform preview.
+- **Split at playhead**, **duplicate clip**, **clear all**.
+- **Import** (file panel + drag-and-drop onto a lane) and **export** a track to WAV.
+- **Mixdown** ("bounce") of all audible tracks to a single WAV (equal-power pan, tanh soft-clip).
+- **Undo/redo**, 30 deep, with gesture debouncing for slider drags.
+
+### 1.7 Timeline
+- Zoom 0.5×–4×, playhead follow, bar ruler, and a loop-region indicator.
+
+### 1.8 Modular effects chain
+- A **global chain** applied to the live input signal, built from `EffectModule` descriptors.
+- 13 built-in modules:
+
+  | Module | Kind | Category |
+  |--------|------|----------|
+  | EQ (3-band shelf/peak) | Apple `AVAudioUnitEQ` | EQ & Filter |
+  | Reverb | Apple `AVAudioUnitReverb` | Space |
+  | Delay | Apple `AVAudioUnitDelay` | Time |
+  | Tape Saturation | custom kernel (Airwindows ToTape6 port) | Saturation |
+  | Gain | custom kernel | Utility |
+  | Distortion | custom kernel (tanh + tone) | Saturation |
+  | Chorus | custom kernel (LFO delay) | Modulation |
+  | Compressor | custom kernel (env follower) | Dynamics |
+  | Flanger | custom kernel (short delay + feedback) | Modulation |
+  | Phaser | custom kernel (6-stage all-pass) | Modulation |
+  | Tremolo | custom kernel (LFO amplitude) | Modulation |
+  | Bitcrusher | custom kernel | Lo-fi |
+  | Noise Gate | custom kernel | Dynamics |
+
+- Add / remove / reorder / bypass; each module's parameters auto-render as knobs.
+- **Presets**: built-in (`Clean`, `Warm`, `Ambient`, `Lo-Fi`) plus user presets, stored as JSON in
+  `~/Library/Application Support/Tape08/Presets/`.
+
+### 1.9 Project persistence
+- `.xyproj` **directory package**: `project.json` manifest + `Audio/Track NN/*.wav` copies.
+- Saves session state: BPM, metronome, quantize, count-in, loop, master/input volume, selected
+  track, per-track clips/volume/pan/mute/solo, the effect chain, and limiter state.
+- Relative clip paths; missing files are reported but non-fatal.
+
+### 1.10 Keyboard shortcuts
+
+| Key | Action | Key | Action |
+|-----|--------|-----|--------|
+| Space | Play / stop all | ⌘Z / ⌘⇧Z | Undo / Redo |
+| R | Record selected track | ⌘S / ⌘⇧S | Save / Save As |
+| M / S | Mute / Solo selected | ⌘O | Open project |
+| 1–8 | Select track | ⌘E | Export selected track |
+| , | Toggle metronome | ⌘T | Split clip at playhead |
+| Tab | Arrange ⇄ Monitor view | ⌘D | Duplicate last clip |
+| F | Toggle playhead follow | ⌘+ / ⌘− | Timeline zoom in / out |
+| Return | Stop all | | |
+
+---
+
+## 2. Architecture
+
+### 2.1 Process & UI spine
+
+```
+@main MonitorApp (App.swift)
+ └─ ContentView                      @StateObject AudioManager
+     ├─ TopBar                        brand · view tabs · status · device pickers · FX/Settings
+     ├─ HStack
+     │   ├─ SettingsPanel   (optional, w 260)
+     │   ├─ SideEffectsPanelView (optional, w 400)   ← FX chain editor
+     │   └─ ArrangeView  ── ArrangeHeadUnit + LoopGridView (+ TrimEditorView)
+     │       or MonitorView
+     └─ TransportBar                  transport · tempo · count-in · IN/OUT · limiter
+      · KeyboardShortcutMonitor (NSEvent local monitor)
+      · AppDelegate (quit on last window close)
+```
+
+`KeyboardShortcutMonitor` installs a local key-down monitor (ignored while a text field is focused)
+and dispatches to `AudioManager` on the main queue.
+
+### 2.2 The facade pattern (the core design)
+
+`AudioManager` is the single `ObservableObject` the whole UI talks to.
+
+- It **owns every `@Published` property** and every one-line forwarder the views call.
+- Behaviour lives in eight **cohesive controllers**, each a plain `final class` (not `Observable`)
+  holding a private `unowned let manager: AudioManager`.
+- Controllers mutate published state **through** `manager`, so `objectWillChange` fires exactly as
+  it did when this was a single ~5,700-line file.
+- **Star topology**: controllers never reference each other directly — only via `manager.<peer>`.
+- `AudioManager.init` force-touches every controller (`_ = metronome; …`) so none can lazily
+  initialise from a timer or the audio thread.
+
+```
+                         AudioManager  (ObservableObject, @Published state, forwarders)
+                         ▲   ▲   ▲   ▲   ▲   ▲   ▲   ▲
+        unowned back-ref │   │   │   │   │   │   │   │
+   ┌──────────┬──────────┴───┴───┴───┴───┴───┴───┴───┴──────────┐
+   │          │          │       │        │        │      │      │
+Metronome  Device   EffectsChain Transport Meter Recording Project Engine
+```
+
+| Controller | Owns (private state) | Published state it writes |
+|------------|----------------------|---------------------------|
+| `MetronomeController` | click buffers, player/mixer nodes, refill timer, tap history | `metronome*`, `tapTempoFlash` |
+| `DeviceController` | CoreAudio listeners, CoreMIDI client/port | `inputDevices`, `outputDevices`, `selectedInputID/OutputID`, `selectedTrack` (MIDI) |
+| `EffectsChainController` | instantiated chain nodes, preset dir | `liveChain`, `presetNames`, `showPresetSave`, `presetSaveName`, `status` |
+| `TransportController` | player/mixer nodes, decoded buffers, play generations, undo/redo stacks | `tracks`, `isPlaying`, `projectDirty`, trim state, `bounceStatus` |
+| `MeterController` | locked meter snapshot, display timer, taps, smoothing state | `levelL/R`, `peakL/R`, `peakDB`, `waveformSamples`, `trackLevels` |
+| `RecordingController` | `AVAudioFile` handle, dry tap, count-in/take timers | `isRecording`, `countingIn`, `recordingDuration`, `recordings`, `tracks` |
+| `ProjectController` | — | `projectURL`, `projectName`, `projectDirty`, `status` |
+| `EngineController` | `AVAudioEngine`, every node it builds, async-insert machinery | `isMonitoring`, `status`, `sampleRateString` |
+
+### 2.3 Audio graph (`EngineController`)
+
+Built fresh on every `startMonitoring()`:
+
+```
+inputNode ──▶ mainMixer (inputVolume) ──▶ dryTap ──▶ [Apple chain nodes] ──▶ [async kernel nodes] ──▶ liveMix ──▶ master ──▶ limiter ──▶ outputNode
+   (pinned to                                        │                                                     │
+    selected device)                                 │ (pre-FX tap → recording, dry)                       │ (post-FX tap → metering)
+                                                     │
+   track 1..8:  playerN ──▶ trackMixN ──▶ master     │
+   metronome:   metPlayer ─▶ metMix ────▶ master     │
+```
+
+- **`dryTap`** is the pre-FX recording point — takes are captured without effects.
+- **`liveMix`** is the post-FX metering point — meters show the effected output.
+- **`master`** applies `volume × 0.6` (headroom), then the **limiter** (Apple `kAudioUnitSubType_PeakLimiter`,
+  pre-gain 0, 12 ms attack, 50 ms decay) sits before the output.
+- Per-track `playerN → trackMixN → master` provide per-track volume/pan/metering/playback.
+- The metronome has its own `metPlayer → metMix → master`.
+
+**Why the two-phase chain build.** Apple effect nodes (`makeAudioNode`) are attached synchronously
+during graph construction. Custom-kernel modules cannot be: `AVAudioUnit.instantiate` is
+asynchronous, and an `AUAudioUnit` subclass cannot receive init arguments. So their factory and
+sample rate are passed through process-wide statics (`EffectAudioUnit.pendingKernelFactory` /
+`pendingSampleRate`) and instantiated one at a time **after** `eng.start()`. At most one
+instantiation is ever in flight process-wide, and each graph build carries an epoch so a completion
+from a torn-down or restarted graph is discarded (guarded by `pumpKernelQueue` — see
+`to_fix.md` §8.9).
+
+### 2.4 Modular effect system (`EffectsCore.swift`, `EffectsKernels.swift`)
+
+```
+EffectModule  ── descriptor: identifier, displayName, category, parameters[],
+   │                          makeKernel(Double)->AudioEffectKernel     (custom DSP)
+   │                          makeAudioNode()->AVAudioNode             (Apple AU)
+   │                          applyParameter(AVAudioNode, id, Float)   (set a param)
+   ▼
+EffectRegistry (singleton)  ── id → EffectModule; registerBuiltIns()
+
+ChainSlot { id: UUID, moduleID, enabled, parameters:[String:Float] }
+
+AudioEffectKernel (protocol)  ── init(sampleRate:) · process([Float*], frames:) ·
+                                 setParameter(id, value:) · reset()
+
+EffectAudioUnit : AUAudioUnit  ── hosts one kernel as an in-process AU; its
+                                 internalRenderBlock pulls input then calls
+                                 kernel.process(...) on the render buffers
+```
+
+- The chain is a **fixed linear list** (`liveChain`) of `ChainSlot`s, processed in order. There is
+  no port/node graph.
+- Each module's `parameters` drive the UI automatically: the FX panel builds one `ArcKnob` per
+  `EffectParameter`, and writes go through `EffectsChainController.paramBinding`.
+- Presets serialise the chain to `[ProjectChainSlotData]` (module id + enabled + params) and back.
+
+### 2.5 Threading model
+
+| Thread | Responsibilities |
+|--------|------------------|
+| **Main** | All SwiftUI, all controller logic, engine build/teardown, **all `@Published` writes**, the 60 Hz meter/display timer, `saveLocation`/panels |
+| **Render (audio)** | Meter taps (RMS into the locked snapshot), recording tap (`AVAudioFile.write`), and each `EffectAudioUnit.internalRenderBlock` → `kernel.process` |
+| **Background (`.userInitiated`)** | Track buffer decode (`TransportController.loadTrackBuffer`), project clip peak decode (`ProjectController.performLoad`) |
+
+Synchronisation today: one `OSAllocatedUnfairLock`-guarded meter snapshot (`MeterController`).
+Everything else that crosses threads — kernel parameters, the pending-instantiation statics — is
+**unsynchronised** (called out in the review).
+
+### 2.6 Persistence & files on disk
+
+```
+saveLocation (default: ~/Desktop/OP-XY Monitor/Tracks)
+ └─ Track NN/                take_YYYY-MM-DD_HH-mm-ss.wav, trim_…, split_A/B_…, <imported>
+
+~/Library/Application Support/Tape08/Presets       *.json (chain presets)
+
+<project>.xyproj/                                  (a directory package)
+ ├─ project.json                                   ProjectData (Codable)
+ └─ Audio/Track NN/<clip>.wav                      copies of referenced clips
+```
+
+`ProjectData` (`Models.swift`) is the versioned manifest (v1). Clip paths are stored **relative** to
+the package so a project is portable.
+
+### 2.7 Data model (`Models.swift`)
+
+- `AudioDevice` — id + name.
+- `TrackClip` — url, duration, peaks, fade in/out (fades currently unused — see review).
+- `TrackInfo` — id, clips, volume, pan, muted, solo, isPlaying, loopProgress.
+- `Recording` — a saved take's metadata (currently unread — see review).
+- `ProjectClipData` / `ProjectTrackData` / `ProjectChainSlotData` / `ProjectData` — persistence DTOs.
+
+---
+
+## 3. Build system
+
+Two equivalent builds share the same `Sources/`:
+
+1. **`package.sh`** — compiles `Sources/*.swift` with `swiftc -O -parse-as-library` for
+   `arm64-apple-macosx14.0`, then assembles `Tape 08.app` (Info.plist, generated `.icns` icon, and
+   an `audio-input` entitlement) and ad-hoc codesigns it. This is the everyday build.
+2. **`Tape08/Tape08.xcodeproj`** — uses an `PBXFileSystemSynchronizedRootGroup` pointed at
+   `../Sources`, so the two builds track the same files; the scheme is `Tape08`.
+
+Robustness checks used during the refactor: `swiftc -typecheck -parse-as-library Sources/*.swift`
+and `xcodebuild … -scheme Tape08 build`.
+
+---
+
+## 4. File map
+
+| File | Lines | Responsibility |
+|------|------:|----------------|
+| `App.swift` | 227 | Entry point, `ContentView`, keyboard monitor, `AppDelegate` |
+| `AudioManager.swift` | 273 | The `ObservableObject` facade: published state + forwarders |
+| `Views.swift` | 2266 | Every SwiftUI view |
+| `EffectsKernels.swift` | 763 | 11 custom DSP kernels |
+| `TransportController.swift` | 624 | Playback, undo/redo, clip editing, mixdown |
+| `EffectsCore.swift` | 493 | Module/registry/chain/AU-host core + Apple module defs |
+| `EngineController.swift` | 262 | `AVAudioEngine` graph spine + async kernel insert |
+| `ProjectController.swift` | 255 | `.xyproj` save/load |
+| `MetronomeController.swift` | 198 | Click scheduling + tap tempo |
+| `EffectsChainController.swift` | 195 | Chain mutations + presets |
+| `MeterController.swift` | 163 | Meter taps + display smoothing |
+| `RecordingController.swift` | 128 | Count-in + dry capture |
+| `Models.swift` | 123 | Value types + `Codable` DTOs |
+| `DeviceController.swift` | 110 | Device discovery + MIDI track follow |
+| `CoreAudioDevices.swift` | 69 | CoreAudio enumeration/selection helpers |
+| `Theme.swift` | 49 | Palette + layout constants |
+| `Support.swift` | 35 | `computePeaks`, timestamp formatter |
+
+---
+
+## 5. Known limitations & risks
+
+Full detail and severities are in [to_fix.md §8](to_fix.md). Highest-impact **open** items:
+
+- **P1** — 60 Hz mutation of `@Published` state re-renders the whole view tree.
+- **UI-1** — the tape timeline clips when the settings + FX panels are open (fixed-width panels).
+- **U1** — count-in is timed by a `Timer`, not aligned to the metronome grid.
+- **C4** — trim/split/duplicate/import, mixdown and project-save still do I/O on the main thread.
+- **H3** — orphaned audio files accumulate (undo/clear don't delete unreferenced WAVs).
+- Edit operations (trim/split/duplicate) only ever act on a track's **last** clip.
+
+Resolved on 2026-10-11 (see `to_fix.md` §8.9): **C1** (param/render race), **C2** (async-insert
+epoch), **C3** (render-thread file writes), **C5** (double-engine leak on start-while-monitoring).
+Remaining audio-thread note: the recording tap copies into a lock-guarded ring rather than a truly
+lock-free one.
+
+## 6. Glossary
+
+- **Take / Clip** — one recorded or imported audio region on a track.
+- **Chain slot** — one `EffectModule` instance in the global effect chain.
+- **Kernel** — a custom DSP `AudioEffectKernel`; hosted as an in-process AU by `EffectAudioUnit`.
+- **Dry** — pre-effects signal (what recording captures).
+- **Bounce / Mixdown** — offline render of all audible tracks to one WAV.
