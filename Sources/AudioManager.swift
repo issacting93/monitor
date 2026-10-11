@@ -1,18 +1,15 @@
-// monitor.swift — OP-XY Looper: retro-tech USB audio monitor, effects & multitrack looper
+// AudioManager.swift — published app facade for TAPE 08
 //
-// Build:  swiftc monitor.swift -o monitor
-// Run:    ./monitor
+// The single ObservableObject the views and KeyboardShortcutMonitor talk to. It
+// owns every @Published property and forwards each operation to the focused
+// controller that implements it (device, effects, metronome, transport, meter,
+// recorder, project, engine). Controllers hold a one-way `unowned` back-reference
+// and write published state through it, so objectWillChange fires exactly as it
+// did when this was one file.
 
 import SwiftUI
-import AppKit
-import AVFoundation
+import Foundation
 import CoreAudio
-import CoreMIDI
-import Darwin
-import os
-import UniformTypeIdentifiers
-
-// ── AudioManager ────────────────────────────────────────────────────────────
 
 class AudioManager: ObservableObject {
     @Published var inputDevices:     [AudioDevice] = []
@@ -264,7 +261,6 @@ class AudioManager: ObservableObject {
     func zoomOut() {
         timelineZoom = max(0.5, timelineZoom / 1.25)
     }
-
 
     // MARK: - Project Save/Load (forwarders — behaviour lives in ProjectController)
 
