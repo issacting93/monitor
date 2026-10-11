@@ -37,19 +37,11 @@ class AudioManager: ObservableObject {
     @Published var liveChain: [ChainSlot] = []
     @Published var showEffects = false
     @Published var showSettings = false
-    private var liveChainNodes: [(id: UUID, node: AVAudioNode)] = []
 
     // Effect chain presets
     @Published var presetNames: [String] = []
     @Published var showPresetSave = false
     @Published var presetSaveName: String = ""
-
-    private static let presetDir: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Tape08/Presets")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
 
     // Settings
     @Published var saveLocation: URL = {
@@ -156,9 +148,10 @@ class AudioManager: ObservableObject {
     // every controller so none can lazily initialize from a timer or audio thread.
     lazy var metronome = MetronomeController(manager: self)
     lazy var device    = DeviceController(manager: self)
+    lazy var effects   = EffectsChainController(manager: self)
 
     init() {
-        _ = metronome; _ = device
+        _ = metronome; _ = device; _ = effects
         EffectAudioUnit.registerComponent()
         EffectRegistry.shared.registerBuiltIns()
         liveChain = [
@@ -178,8 +171,8 @@ class AudioManager: ObservableObject {
         device.loadDevices()
         device.setupHardwareListeners()
         device.setupMIDI()
-        installBuiltInPresets()
-        refreshPresetList()
+        effects.installBuiltInPresets()
+        effects.refreshPresetList()
     }
 
     deinit {
@@ -257,7 +250,7 @@ class AudioManager: ObservableObject {
             guard let mod = EffectRegistry.shared.module(for: slot.moduleID) else { continue }
             if let node = mod.makeAudioNode?() {
                 eng.attach(node)
-                setNodeBypass(node, bypass: !slot.enabled)
+                effects.setNodeBypass(node, bypass: !slot.enabled)
                 for (pid, val) in slot.parameters { mod.applyParameter?(node, pid, val) }
                 chainNodes.append((slot.id, node))
             } else if mod.makeKernel != nil {
@@ -332,7 +325,7 @@ class AudioManager: ObservableObject {
         }
 
         engine       = eng
-        liveChainNodes = chainNodes
+        effects.setChainNodes(chainNodes)
         outMixer     = liveMix
         dryTapMixer  = dryTap
         masterMixer  = master
@@ -373,7 +366,7 @@ class AudioManager: ObservableObject {
                     let fmt = liveMix.outputFormat(forBus: 0)
                     // Insert after the last chain node, or after dryTapMixer
                     let insertAfter: AVAudioNode
-                    if let last = self.liveChainNodes.last?.node { insertAfter = last }
+                    if let last = self.effects.lastChainNode { insertAfter = last }
                     else if let dryTap = self.dryTapMixer { insertAfter = dryTap }
                     else { insertAfter = eng.mainMixerNode }
                     eng.disconnectNodeOutput(insertAfter)
@@ -382,7 +375,7 @@ class AudioManager: ObservableObject {
                     eng.connect(kernelNode,  to: liveMix, format: fmt)
                     kernelNode.auAudioUnit.shouldBypassEffect = !head.slot.enabled
                     for (pid, val) in head.slot.parameters { head.mod.applyParameter?(kernelNode, pid, val) }
-                    self.liveChainNodes.append((head.slot.id, kernelNode))
+                    self.effects.appendChainNode(id: head.slot.id, node: kernelNode)
                 }
                 self.instantiateKernels(rest, sampleRate: sampleRate)
             }
@@ -424,7 +417,7 @@ class AudioManager: ObservableObject {
         outMixer?.removeTap(onBus: 0)
         dryTapMixer?.removeTap(onBus: 0)
         engine?.stop()
-        liveChainNodes = []
+        effects.clearChainNodes()
         engine = nil
         outMixer = nil; dryTapMixer = nil; masterMixer = nil; masterLimiterNode = nil
         playerNodes = []; trackMixers = []
@@ -532,152 +525,25 @@ class AudioManager: ObservableObject {
         }
     }
 
-    // MARK: - Chain Effects
+    // MARK: - Chain Effects (forwarders — behaviour lives in EffectsChainController)
 
-    private func setNodeBypass(_ node: AVAudioNode, bypass: Bool) {
-        if let effect = node as? AVAudioUnitEffect { effect.bypass = bypass }
-        else if let au = node as? AVAudioUnit { au.auAudioUnit.shouldBypassEffect = bypass }
-    }
-
-    func applySlotParam(_ slotIndex: Int, _ paramID: String, _ value: Float) {
-        guard slotIndex < liveChain.count else { return }
-        let slot = liveChain[slotIndex]
-        guard let mod = EffectRegistry.shared.module(for: slot.moduleID),
-              let entry = liveChainNodes.first(where: { $0.id == slot.id }) else { return }
-        mod.applyParameter?(entry.node, paramID, value)
-    }
-
-    func toggleSlotBypass(_ slotIndex: Int) {
-        guard slotIndex < liveChain.count else { return }
-        liveChain[slotIndex].enabled.toggle()
-        let slot = liveChain[slotIndex]
-        if let entry = liveChainNodes.first(where: { $0.id == slot.id }) {
-            setNodeBypass(entry.node, bypass: !slot.enabled)
-        }
-    }
+    func toggleSlotBypass(_ slotIndex: Int) { effects.toggleSlotBypass(slotIndex) }
 
     func paramBinding(slot index: Int, param id: String) -> Binding<Double> {
-        Binding(
-            get: { [weak self] in
-                guard let self, index < self.liveChain.count else { return 0 }
-                return Double(self.liveChain[index].parameters[id] ?? 0)
-            },
-            set: { [weak self] newVal in
-                guard let self, index < self.liveChain.count else { return }
-                self.liveChain[index].parameters[id] = Float(newVal)
-                self.applySlotParam(index, id, Float(newVal))
-            }
-        )
+        effects.paramBinding(slot: index, param: id)
     }
 
-    func addSlot(moduleID: String) {
-        liveChain.append(ChainSlot(moduleID: moduleID))
-        rebuildChain()
-    }
+    func addSlot(moduleID: String) { effects.addSlot(moduleID: moduleID) }
 
-    func removeSlot(at index: Int) {
-        guard index < liveChain.count else { return }
-        liveChain.remove(at: index)
-        rebuildChain()
-    }
+    func removeSlot(at index: Int) { effects.removeSlot(at: index) }
 
-    func moveSlot(from: Int, to: Int) {
-        guard from < liveChain.count, to < liveChain.count, from != to else { return }
-        let slot = liveChain.remove(at: from)
-        liveChain.insert(slot, at: to)
-        rebuildChain()
-    }
+    func moveSlot(from: Int, to: Int) { effects.moveSlot(from: from, to: to) }
 
-    private func rebuildChain() {
-        guard isMonitoring else { return }
-        stopMonitoring()
-        startMonitoring()
-    }
+    func saveChainPreset(name: String) { effects.saveChainPreset(name: name) }
 
-    // MARK: - Effect Chain Presets
+    func loadChainPreset(name: String) { effects.loadChainPreset(name: name) }
 
-    private func presetURL(name: String) -> URL {
-        Self.presetDir.appendingPathComponent(name + ".json")
-    }
-
-    func refreshPresetList() {
-        let fm = FileManager.default
-        let dir = Self.presetDir
-        guard let files = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else {
-            presetNames = []
-            return
-        }
-        presetNames = files
-            .filter { $0.pathExtension == "json" }
-            .map { $0.deletingPathExtension().lastPathComponent }
-            .sorted()
-    }
-
-    func saveChainPreset(name: String) {
-        let data = liveChain.map { slot in
-            ProjectChainSlotData(moduleID: slot.moduleID, enabled: slot.enabled, parameters: slot.parameters)
-        }
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let json = try? encoder.encode(data) else { return }
-        try? json.write(to: presetURL(name: name))
-        refreshPresetList()
-        status = "Preset saved: \(name)"
-    }
-
-    func loadChainPreset(name: String) {
-        let url = presetURL(name: name)
-        guard let json = try? Data(contentsOf: url),
-              let slots = try? JSONDecoder().decode([ProjectChainSlotData].self, from: json) else {
-            status = "Failed to load preset"
-            return
-        }
-        var newChain: [ChainSlot] = []
-        for slotData in slots {
-            var slot = ChainSlot(moduleID: slotData.moduleID, enabled: slotData.enabled)
-            // Merge saved values over the module defaults so partial presets don't
-            // drop unspecified parameters to zero (which desyncs the UI from the DSP).
-            for (key, value) in slotData.parameters { slot.parameters[key] = value }
-            newChain.append(slot)
-        }
-        liveChain = newChain
-        rebuildChain()
-        status = "Loaded preset: \(name)"
-    }
-
-    func deleteChainPreset(name: String) {
-        try? FileManager.default.removeItem(at: presetURL(name: name))
-        refreshPresetList()
-        status = "Deleted preset: \(name)"
-    }
-
-    private func installBuiltInPresets() {
-        let builtIns: [(String, [ProjectChainSlotData])] = [
-            ("Clean", []),
-            ("Warm", [
-                ProjectChainSlotData(moduleID: "com.apple.eq", enabled: true, parameters: ["lowGain": 3, "midGain": -1, "highGain": -2]),
-                ProjectChainSlotData(moduleID: "com.opxy.tape-saturation", enabled: true, parameters: ["drive": 0.4, "bump": 0.6, "mix": 0.5]),
-            ]),
-            ("Ambient", [
-                ProjectChainSlotData(moduleID: "com.apple.reverb", enabled: true, parameters: ["wetDryMix": 55, "preset": 4]),
-                ProjectChainSlotData(moduleID: "com.apple.delay", enabled: true, parameters: ["time": 0.35, "feedback": 40, "wetDryMix": 30, "cutoff": 8000]),
-            ]),
-            ("Lo-Fi", [
-                ProjectChainSlotData(moduleID: "com.opxy.bitcrusher", enabled: true, parameters: ["bits": 10, "downsample": 8, "mix": 0.6]),
-                ProjectChainSlotData(moduleID: "com.opxy.tape-saturation", enabled: true, parameters: ["drive": 0.5, "bump": 0.7, "mix": 0.4]),
-                ProjectChainSlotData(moduleID: "com.opxy.chorus", enabled: true, parameters: ["rate": 0.8, "depth": 0.5, "mix": 0.4]),
-            ]),
-        ]
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // Built-ins are code-defined defaults, so (re)write them on launch. This
-        // keeps them current when their definitions change between builds.
-        for (name, chain) in builtIns {
-            if let json = try? encoder.encode(chain) {
-                try? json.write(to: presetURL(name: name))
-            }
-        }
-    }
+    func deleteChainPreset(name: String) { effects.deleteChainPreset(name: name) }
 
     // MARK: - Metronome (forwarders — behaviour lives in MetronomeController)
 
