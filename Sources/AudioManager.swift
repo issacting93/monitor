@@ -86,7 +86,6 @@ class AudioManager: ObservableObject {
 
     // Tap tempo
     @Published var tapTempoFlash: Bool = false
-    private var tapTimestamps: [Date] = []
 
     // Quantize
     @Published var quantizeMode: Int = 0
@@ -123,16 +122,6 @@ class AudioManager: ObservableObject {
     private var playerNodes:     [AVAudioPlayerNode] = []
     private var trackMixers:     [AVAudioMixerNode] = []
     private var trackBuffers:    [AVAudioPCMBuffer?] = Array(repeating: nil, count: Theme.trackCount)
-    private var metronomePlayer: AVAudioPlayerNode?
-    private var metronomeMixer:  AVAudioMixerNode?
-    private var metronomeTimer:  Timer?            // low-frequency queue-refill timer
-    private var metronomeClickBuffer: AVAudioPCMBuffer?
-    private var metronomeBeatCount: Int = 0
-    // Sample-accurate metronome scheduling state. Beats are queued on the player node
-    // at exact frame positions ahead of time, so the refill timer's own jitter never
-    // reaches the output (a plain per-beat Timer would drift).
-    private var metronomeNextBeatFrame: Double = 0
-    private var metronomeScheduledBPM: Double = 0
 
     // MIDI
     private var midiClient: MIDIClientRef = 0
@@ -163,7 +152,14 @@ class AudioManager: ObservableObject {
     private var displayTimer:   Timer?
     private var recordingTimer: Timer?
 
+    // Sub-controllers. AudioManager stays the published facade the views talk to;
+    // each controller owns a slice of private engine/algorithm state and reaches
+    // back through `manager` (a one-way unowned reference). `init` force-touches
+    // every controller so none can lazily initialize from a timer or audio thread.
+    lazy var metronome = MetronomeController(manager: self)
+
     init() {
+        _ = metronome
         EffectAudioUnit.registerComponent()
         EffectRegistry.shared.registerBuiltIns()
         liveChain = [
@@ -421,9 +417,7 @@ class AudioManager: ObservableObject {
         playerNodes  = players
         trackMixers  = trkMixers
         installTrackMeterTaps()
-        metronomePlayer      = metPlayer
-        metronomeMixer       = metMix
-        metronomeClickBuffer = generateClickBuffer(sampleRate: stereoFmt.sampleRate, channels: 2)
+        metronome.attach(player: metPlayer, mixer: metMix, sampleRate: stereoFmt.sampleRate)
         isMonitoring = true
 
         status = "\(inDev.name) → \(nameOfDevice(currentOutID))"
@@ -506,7 +500,7 @@ class AudioManager: ObservableObject {
     }
 
     private func teardown() {
-        stopMetronome()
+        metronome.detach()
         removeTrackMeterTaps()
         outMixer?.removeTap(onBus: 0)
         dryTapMixer?.removeTap(onBus: 0)
@@ -515,7 +509,6 @@ class AudioManager: ObservableObject {
         engine = nil
         outMixer = nil; dryTapMixer = nil; masterMixer = nil; masterLimiterNode = nil
         playerNodes = []; trackMixers = []
-        metronomePlayer = nil; metronomeMixer = nil; metronomeClickBuffer = nil
     }
 
     // MARK: - Metering
@@ -767,144 +760,13 @@ class AudioManager: ObservableObject {
         }
     }
 
-    // MARK: - Metronome
+    // MARK: - Metronome (forwarders — behaviour lives in MetronomeController)
 
-    private func generateClickBuffer(sampleRate: Double, channels: AVAudioChannelCount) -> AVAudioPCMBuffer? {
-        let duration = 0.015
-        let frames = AVAudioFrameCount(sampleRate * duration)
-        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channels),
-              let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames) else { return nil }
-        buf.frameLength = frames
-        guard let data = buf.floatChannelData else { return nil }
-        let freq: Float = 1000.0
-        for i in 0..<Int(frames) {
-            let t = Float(i) / Float(sampleRate)
-            let envelope = 1.0 - (Float(i) / Float(frames))
-            let sample = sin(2.0 * .pi * freq * t) * envelope * 0.8
-            for ch in 0..<Int(channels) { data[ch][i] = sample }
-        }
-        return buf
-    }
+    func toggleMetronome() { metronome.toggle() }
 
-    private func generateAccentClickBuffer(sampleRate: Double, channels: AVAudioChannelCount) -> AVAudioPCMBuffer? {
-        let duration = 0.02
-        let frames = AVAudioFrameCount(sampleRate * duration)
-        guard let fmt = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channels),
-              let buf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: frames) else { return nil }
-        buf.frameLength = frames
-        guard let data = buf.floatChannelData else { return nil }
-        let freq: Float = 1500.0
-        for i in 0..<Int(frames) {
-            let t = Float(i) / Float(sampleRate)
-            let envelope = 1.0 - (Float(i) / Float(frames))
-            let sample = sin(2.0 * .pi * freq * t) * envelope * 0.95
-            for ch in 0..<Int(channels) { data[ch][i] = sample }
-        }
-        return buf
-    }
+    func setMetronomeVolume(_ v: Double) { metronome.setVolume(v) }
 
-    private func startMetronome() {
-        guard metronomeEnabled, let player = metronomePlayer, let click = metronomeClickBuffer else { return }
-        let accentClick = generateAccentClickBuffer(
-            sampleRate: click.format.sampleRate, channels: click.format.channelCount) ?? click
-        let sr = click.format.sampleRate
-
-        metronomeBeatCount = 0
-        metronomeNextBeatFrame = 0
-        metronomeScheduledBPM = metronomeBPM
-        player.stop()
-        player.play()
-        refillMetronomeQueue(accent: accentClick, click: click, sampleRate: sr)
-
-        // Beats are queued sample-accurately ~2 s ahead, so this timer only tops up the
-        // queue; its jitter is inaudible.
-        metronomeTimer?.invalidate()
-        metronomeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
-            self?.refillMetronomeQueue(accent: accentClick, click: click, sampleRate: sr)
-        }
-    }
-
-    // Queues any beats that fall within the lookahead window at their exact frame
-    // positions on the player node's timeline.
-    private func refillMetronomeQueue(accent: AVAudioPCMBuffer, click: AVAudioPCMBuffer, sampleRate: Double) {
-        guard let player = metronomePlayer, metronomeEnabled else { return }
-
-        // Tempo changed — drop the queued beats and re-anchor to the current playhead.
-        if metronomeScheduledBPM != metronomeBPM {
-            player.stop()
-            player.play()
-            metronomeScheduledBPM = metronomeBPM
-            metronomeNextBeatFrame = 0
-            metronomeBeatCount = 0
-        }
-
-        let interval = (60.0 / metronomeBPM) * sampleRate   // frames per beat
-        guard interval >= 1 else { return }
-
-        // Current playhead position on the node's timeline (0 until it starts rendering).
-        var nowFrame: Double = 0
-        if let nodeTime = player.lastRenderTime, let pt = player.playerTime(forNodeTime: nodeTime) {
-            nowFrame = Double(pt.sampleTime)
-        }
-        // If we've fallen behind (e.g. after a stall), resume just ahead of the playhead.
-        if metronomeNextBeatFrame < nowFrame { metronomeNextBeatFrame = nowFrame }
-
-        let horizon = nowFrame + sampleRate * 2.0
-        while metronomeNextBeatFrame < horizon {
-            let isAccent = metronomeBeatCount % 4 == 0
-            let at = AVAudioTime(sampleTime: AVAudioFramePosition(metronomeNextBeatFrame.rounded()),
-                                 atRate: sampleRate)
-            player.scheduleBuffer(isAccent ? accent : click, at: at, options: [], completionHandler: nil)
-            metronomeBeatCount += 1
-            metronomeNextBeatFrame += interval
-        }
-    }
-
-    private func stopMetronome() {
-        metronomeTimer?.invalidate(); metronomeTimer = nil
-        metronomePlayer?.stop()
-        metronomeBeatCount = 0
-        metronomeNextBeatFrame = 0
-        metronomeScheduledBPM = 0
-    }
-
-    func toggleMetronome() {
-        metronomeEnabled.toggle()
-        if tracks.contains(where: { $0.isPlaying }) {
-            if metronomeEnabled { startMetronome() } else { stopMetronome() }
-        }
-    }
-
-    func setMetronomeVolume(_ v: Double) {
-        metronomeVolume = v
-        metronomeMixer?.outputVolume = Float(v)
-    }
-
-    func tapTempo() {
-        let now = Date()
-        // Reset if more than 2 seconds since last tap
-        if let last = tapTimestamps.last, now.timeIntervalSince(last) > 2.0 {
-            tapTimestamps.removeAll()
-        }
-        tapTimestamps.append(now)
-        // Keep last 8 taps
-        if tapTimestamps.count > 8 { tapTimestamps.removeFirst() }
-        // Need at least 2 taps to calculate
-        if tapTimestamps.count >= 2 {
-            var totalInterval: TimeInterval = 0
-            for i in 1..<tapTimestamps.count {
-                totalInterval += tapTimestamps[i].timeIntervalSince(tapTimestamps[i - 1])
-            }
-            let avgInterval = totalInterval / Double(tapTimestamps.count - 1)
-            let newBPM = 60.0 / avgInterval
-            metronomeBPM = min(300, max(40, newBPM.rounded()))
-        }
-        // Visual flash
-        tapTempoFlash = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            self?.tapTempoFlash = false
-        }
-    }
+    func tapTempo() { metronome.tapTempo() }
 
     func cycleQuantize() {
         quantizeMode = (quantizeMode + 1) % Self.quantizeLabels.count
@@ -919,7 +781,7 @@ class AudioManager: ObservableObject {
         if countInBars > 0 && !countingIn {
             countingIn = true
             status = "Count-in..."
-            if metronomeTimer == nil { startMetronome() }
+            if !metronome.isRunning { metronome.start() }
             let secsPerBar = 240.0 / metronomeBPM
             let countInDuration = secsPerBar * Double(countInBars)
             countInTimer = Timer.scheduledTimer(withTimeInterval: countInDuration, repeats: false) { [weak self] _ in
@@ -946,7 +808,7 @@ class AudioManager: ObservableObject {
             recordingDuration = 0
             isRecording       = true
             status            = "Recording TRK \(String(format: "%02d", selectedTrack + 1))"
-            if metronomeEnabled && metronomeTimer == nil { startMetronome() }
+            if metronomeEnabled && !metronome.isRunning { metronome.start() }
             recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 guard let self, let s = self.recordingStart else { return }
                 DispatchQueue.main.async { self.recordingDuration = Date().timeIntervalSince(s) }
@@ -962,7 +824,7 @@ class AudioManager: ObservableObject {
             countInTimer?.invalidate(); countInTimer = nil
             countingIn = false
             status = "Count-in cancelled"
-            if !tracks.contains(where: { $0.isPlaying }) { stopMetronome() }
+            if !tracks.contains(where: { $0.isPlaying }) { metronome.stop() }
             return
         }
         recordingTimer?.invalidate(); recordingTimer = nil
@@ -971,7 +833,7 @@ class AudioManager: ObservableObject {
         let trk   = selectedTrack
         audioFile   = nil
         isRecording = false
-        if !tracks.contains(where: { $0.isPlaying }) { stopMetronome() }
+        if !tracks.contains(where: { $0.isPlaying }) { metronome.stop() }
 
         guard let u = saved else { return }
         let peaks = computePeaks(url: u, count: Theme.clipPeaks)
@@ -1037,7 +899,7 @@ class AudioManager: ObservableObject {
         scheduleTrackBuffer(i, buffer: buffer)
         tracks[i].isPlaying = true
         refreshTrackMixers()
-        if metronomeEnabled && metronomeTimer == nil { startMetronome() }
+        if metronomeEnabled && !metronome.isRunning { metronome.start() }
         isPlaying = true
         status = "Looping TRK \(String(format: "%02d", i + 1))"
     }
@@ -1049,7 +911,7 @@ class AudioManager: ObservableObject {
         tracks[i].isPlaying = false
         tracks[i].loopProgress = 0
         if !tracks.contains(where: { $0.isPlaying }) {
-            stopMetronome()
+            metronome.stop()
             isPlaying = false
             status = "Stopped"
         }
@@ -1093,12 +955,12 @@ class AudioManager: ObservableObject {
         }
         refreshTrackMixers()
         isPlaying = true
-        startMetronome()
+        metronome.start()
         status = "Playing all tracks"
     }
 
     func stopAll() {
-        stopMetronome()
+        metronome.stop()
         for i in 0..<tracks.count {
             if i < playerNodes.count { playerNodes[i].stop() }
             tracks[i].isPlaying = false
