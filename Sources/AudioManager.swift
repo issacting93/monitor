@@ -115,25 +115,7 @@ class AudioManager: ObservableObject {
     // Per-track metering
     @Published var trackLevels: [Double] = Array(repeating: 0, count: Theme.trackCount)
 
-    // Meter bridge. The render-thread taps publish raw levels into `meters` under a
-    // lock (cheap, uncontended, no allocation); the display timer reads that snapshot
-    // on the main thread, which owns all smoothing / peak-hold state. This keeps the
-    // render thread from racing the main thread on shared meter variables.
-    private struct MeterSnapshot {
-        var levelL: Float = 0
-        var levelR: Float = 0
-        var track: [Float] = Array(repeating: 0, count: Theme.trackCount)
-    }
-    private let meters = OSAllocatedUnfairLock(initialState: MeterSnapshot())
-
-    // Main-thread-only meter smoothing / peak-hold state
-    private var rawPeakL:  Float = 0
-    private var rawPeakR:  Float = 0
-    private var peakHoldL: Int   = 0
-    private var peakHoldR: Int   = 0
-
     private var recordingStart: Date?
-    private var displayTimer:   Timer?
     private var recordingTimer: Timer?
 
     // Sub-controllers. AudioManager stays the published facade the views talk to;
@@ -144,9 +126,10 @@ class AudioManager: ObservableObject {
     lazy var device    = DeviceController(manager: self)
     lazy var effects   = EffectsChainController(manager: self)
     lazy var transport = TransportController(manager: self)
+    lazy var meter     = MeterController(manager: self)
 
     init() {
-        _ = metronome; _ = device; _ = effects; _ = transport
+        _ = metronome; _ = device; _ = effects; _ = transport; _ = meter
         EffectAudioUnit.registerComponent()
         EffectRegistry.shared.registerBuiltIns()
         liveChain = [
@@ -304,9 +287,7 @@ class AudioManager: ObservableObject {
         master.outputVolume = Float(volume) * 0.6   // slight headroom to reduce clipping
 
         // Metering tap: post-FX signal (meters show effected output)
-        liveMix.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buf, _ in
-            self?.processMeterTap(buf)
-        }
+        meter.attach(postFX: liveMix)
 
         // Recording tap: pre-FX dry signal (takes are recorded without effects)
         dryTap.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buf, _ in
@@ -325,13 +306,13 @@ class AudioManager: ObservableObject {
         dryTapMixer  = dryTap
         masterMixer  = master
         transport.attach(players: players, mixers: trkMixers)
-        installTrackMeterTaps()
+        meter.installTrackTaps(trkMixers)
         metronome.attach(player: metPlayer, mixer: metMix, sampleRate: stereoFmt.sampleRate)
         isMonitoring = true
 
         status = "\(inDev.name) → \(nameOfDevice(currentOutID))"
         sampleRateString = "\(Int(hwFmt.sampleRate / 1000)) kHz · 24-bit · Stereo"
-        startDisplayTimer()
+        meter.startDisplayTimer()
 
         // Async-insert kernel-based modules. AVAudioUnit instantiation is async and
         // AUAudioUnit subclasses can't take init arguments, so the kernel factory and
@@ -381,10 +362,7 @@ class AudioManager: ObservableObject {
         stopAll()
         teardown()
         isMonitoring = false
-        displayTimer?.invalidate(); displayTimer = nil
-        levelL = 0; levelR = 0; peakL = 0; peakR = 0
-        peakDB = -Double.infinity
-        waveformSamples = Array(repeating: 0, count: Theme.waveformCount)
+        meter.resetDisplay()
         status = "Stopped"
     }
 
@@ -407,105 +385,13 @@ class AudioManager: ObservableObject {
 
     private func teardown() {
         metronome.detach()
-        removeTrackMeterTaps()
-        outMixer?.removeTap(onBus: 0)
+        meter.detach()
         dryTapMixer?.removeTap(onBus: 0)
         engine?.stop()
         effects.clearChainNodes()
         engine = nil
         outMixer = nil; dryTapMixer = nil; masterMixer = nil; masterLimiterNode = nil
         transport.detach()
-    }
-
-    // MARK: - Metering
-
-    /// Metering-only tap (post-FX on liveMix). Does NOT write to the audio file.
-    /// Runs on the render thread — only publishes raw RMS into the locked snapshot.
-    private func processMeterTap(_ buf: AVAudioPCMBuffer) {
-        guard let data = buf.floatChannelData else { return }
-        let n = Int(buf.frameLength)
-        guard n > 0 else { return }
-        let channels = Int(buf.format.channelCount)
-
-        var sumL: Float = 0
-        for i in 0..<n { sumL += data[0][i] * data[0][i] }
-        let rmsL = sqrt(sumL / Float(n))
-
-        let rmsR: Float
-        if channels > 1 {
-            var sumR: Float = 0
-            for i in 0..<n { sumR += data[1][i] * data[1][i] }
-            rmsR = sqrt(sumR / Float(n))
-        } else { rmsR = rmsL }
-
-        meters.withLock { $0.levelL = rmsL; $0.levelR = rmsR }
-    }
-
-    private func installTrackMeterTaps() {
-        let mixers = transport.mixers
-        for i in 0..<mixers.count {
-            mixers[i].installTap(onBus: 0, bufferSize: 2048, format: nil) { [weak self] buf, _ in
-                guard let self, let data = buf.floatChannelData else { return }
-                let n = Int(buf.frameLength)
-                guard n > 0 else { return }
-                var peak: Float = 0
-                for s in 0..<n { peak = max(peak, abs(data[0][s])) }
-                if buf.format.channelCount > 1 {
-                    for s in 0..<n { peak = max(peak, abs(data[1][s])) }
-                }
-                let peakValue = peak
-                self.meters.withLock { $0.track[i] = peakValue }
-            }
-        }
-    }
-
-    private func removeTrackMeterTaps() {
-        for mixer in transport.mixers {
-            mixer.removeTap(onBus: 0)
-        }
-    }
-
-    private func startDisplayTimer() {
-        displayTimer?.invalidate()
-        // Timer fires on the main run loop, so all smoothing / peak-hold below is
-        // main-thread state; the render thread only writes the locked snapshot.
-        displayTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            let snap = self.meters.withLock { $0 }
-
-            let scaledL = Double(min(snap.levelL * 4.5, 1))
-            let scaledR = Double(min(snap.levelR * 4.5, 1))
-
-            // Peak hold (main-thread only)
-            if snap.levelL >= self.rawPeakL { self.rawPeakL = snap.levelL; self.peakHoldL = 0 }
-            else { self.peakHoldL += 1; if self.peakHoldL > 30 { self.rawPeakL *= 0.94 } }
-            if snap.levelR >= self.rawPeakR { self.rawPeakR = snap.levelR; self.peakHoldR = 0 }
-            else { self.peakHoldR += 1; if self.peakHoldR > 30 { self.rawPeakR *= 0.94 } }
-
-            let scaledPeakL = Double(min(self.rawPeakL * 4.5, 1))
-            let scaledPeakR = Double(min(self.rawPeakR * 4.5, 1))
-            let maxPeak     = Double(max(self.rawPeakL, self.rawPeakR))
-
-            self.levelL = self.levelL * 0.70 + scaledL * 0.30
-            self.levelR = self.levelR * 0.70 + scaledR * 0.30
-            self.peakL  = scaledPeakL
-            self.peakR  = scaledPeakR
-            self.peakDB = maxPeak > 0 ? 20.0 * log10(maxPeak) : -Double.infinity
-
-            var samples = self.waveformSamples
-            samples.removeFirst()
-            samples.append((self.levelL + self.levelR) / 2.0)
-            self.waveformSamples = samples
-
-            // Update per-track meters
-            for i in 0..<Theme.trackCount {
-                let raw = Double(min(snap.track[i] * 4.5, 1))
-                self.trackLevels[i] = self.trackLevels[i] * 0.7 + raw * 0.3
-            }
-
-            // Update track loop progress
-            self.transport.updatePlaybackProgress()
-        }
     }
 
     // MARK: - Chain Effects (forwarders — behaviour lives in EffectsChainController)
