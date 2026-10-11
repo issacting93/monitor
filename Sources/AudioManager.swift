@@ -60,7 +60,6 @@ class AudioManager: ObservableObject {
     // Count-in
     @Published var countInBars: Int = 0   // 0 = off, 1–4
     @Published var countingIn: Bool = false
-    private var countInTimer: Timer?
 
     // View mode (0 = arrange, 1 = monitor)
     @Published var viewMode: Int = 0
@@ -106,7 +105,6 @@ class AudioManager: ObservableObject {
     private var engine:       AVAudioEngine?
     private var outMixer:     AVAudioMixerNode?
     var masterMixer:          AVAudioMixerNode?
-    private var audioFile:    AVAudioFile?
     private var dryTapMixer:  AVAudioMixerNode?   // pre-FX tap point for dry recording
 
     // MIDI
@@ -114,9 +112,6 @@ class AudioManager: ObservableObject {
 
     // Per-track metering
     @Published var trackLevels: [Double] = Array(repeating: 0, count: Theme.trackCount)
-
-    private var recordingStart: Date?
-    private var recordingTimer: Timer?
 
     // Sub-controllers. AudioManager stays the published facade the views talk to;
     // each controller owns a slice of private engine/algorithm state and reaches
@@ -127,9 +122,10 @@ class AudioManager: ObservableObject {
     lazy var effects   = EffectsChainController(manager: self)
     lazy var transport = TransportController(manager: self)
     lazy var meter     = MeterController(manager: self)
+    lazy var recorder  = RecordingController(manager: self)
 
     init() {
-        _ = metronome; _ = device; _ = effects; _ = transport; _ = meter
+        _ = metronome; _ = device; _ = effects; _ = transport; _ = meter; _ = recorder
         EffectAudioUnit.registerComponent()
         EffectRegistry.shared.registerBuiltIns()
         liveChain = [
@@ -290,9 +286,7 @@ class AudioManager: ObservableObject {
         meter.attach(postFX: liveMix)
 
         // Recording tap: pre-FX dry signal (takes are recorded without effects)
-        dryTap.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buf, _ in
-            if let file = self?.audioFile { try? file.write(from: buf) }
-        }
+        recorder.attach(dryMixer: dryTap)
 
         eng.prepare()
         do { try eng.start() } catch {
@@ -386,7 +380,7 @@ class AudioManager: ObservableObject {
     private func teardown() {
         metronome.detach()
         meter.detach()
-        dryTapMixer?.removeTap(onBus: 0)
+        recorder.detach()
         engine?.stop()
         effects.clearChainNodes()
         engine = nil
@@ -480,82 +474,11 @@ class AudioManager: ObservableObject {
 
     func setTrackPan(_ i: Int, _ p: Double) { transport.setTrackPan(i, p) }
 
-    // MARK: - Recording
+    // MARK: - Recording (forwarders — behaviour lives in RecordingController)
 
-    func startRecording() {
-        guard isMonitoring, engine != nil else { return }
+    func startRecording() { recorder.start() }
 
-        // Count-in: play metronome clicks for N bars before actually recording
-        if countInBars > 0 && !countingIn {
-            countingIn = true
-            status = "Count-in..."
-            if !metronome.isRunning { metronome.start() }
-            let secsPerBar = 240.0 / metronomeBPM
-            let countInDuration = secsPerBar * Double(countInBars)
-            countInTimer = Timer.scheduledTimer(withTimeInterval: countInDuration, repeats: false) { [weak self] _ in
-                DispatchQueue.main.async {
-                    self?.countingIn = false
-                    self?.countInTimer = nil
-                    self?.beginRecording()
-                }
-            }
-            return
-        }
-        beginRecording()
-    }
-
-    private func beginRecording() {
-        guard engine != nil, let dryTap = dryTapMixer else { return }
-        let fmt  = dryTap.outputFormat(forBus: 0)
-        let name = "take_\(timestampFmt.string(from: Date())).wav"
-        let url  = transport.trackFolder(selectedTrack).appendingPathComponent(name)
-        do {
-            audioFile = try AVAudioFile(forWriting: url, settings: fmt.settings,
-                                        commonFormat: .pcmFormatFloat32, interleaved: false)
-            recordingStart    = Date()
-            recordingDuration = 0
-            isRecording       = true
-            status            = "Recording TRK \(String(format: "%02d", selectedTrack + 1))"
-            if metronomeEnabled && !metronome.isRunning { metronome.start() }
-            recordingTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-                guard let self, let s = self.recordingStart else { return }
-                DispatchQueue.main.async { self.recordingDuration = Date().timeIntervalSince(s) }
-            }
-        } catch {
-            status = "Recording error: \(error.localizedDescription)"
-        }
-    }
-
-    func stopRecording() {
-        // Cancel count-in if active
-        if countingIn {
-            countInTimer?.invalidate(); countInTimer = nil
-            countingIn = false
-            status = "Count-in cancelled"
-            if !tracks.contains(where: { $0.isPlaying }) { metronome.stop() }
-            return
-        }
-        recordingTimer?.invalidate(); recordingTimer = nil
-        let saved = audioFile?.url
-        let dur   = recordingDuration
-        let trk   = selectedTrack
-        audioFile   = nil
-        isRecording = false
-        if !tracks.contains(where: { $0.isPlaying }) { metronome.stop() }
-
-        guard let u = saved else { return }
-        let peaks = computePeaks(url: u, count: Theme.clipPeaks)
-        let clip  = TrackClip(url: u, duration: dur, peaks: peaks)
-        let rec   = Recording(url: u, duration: dur, trackIndex: trk)
-
-        status = "Saved \(u.lastPathComponent) → TRK \(String(format: "%02d", trk + 1))"
-        DispatchQueue.main.async {
-            self.transport.pushUndo()
-            self.recordings.append(rec)
-            self.tracks[trk].clips.append(clip)
-            self.transport.loadTrackBuffer(trk)
-        }
-    }
+    func stopRecording() { recorder.stop() }
 
     // MARK: - Timeline Zoom
 
