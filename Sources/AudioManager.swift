@@ -99,13 +99,6 @@ class AudioManager: ObservableObject {
 
     // Master limiter
     @Published var masterLimiterEnabled: Bool = true
-    private var masterLimiterNode: AVAudioUnitEffect?
-
-    // Internal Audio Engine
-    private var engine:       AVAudioEngine?
-    private var outMixer:     AVAudioMixerNode?
-    var masterMixer:          AVAudioMixerNode?
-    private var dryTapMixer:  AVAudioMixerNode?   // pre-FX tap point for dry recording
 
     // MIDI
     @Published var midiTrackFollow: Bool = true
@@ -124,10 +117,11 @@ class AudioManager: ObservableObject {
     lazy var meter     = MeterController(manager: self)
     lazy var recorder  = RecordingController(manager: self)
     lazy var project   = ProjectController(manager: self)
+    lazy var engine    = EngineController(manager: self)
 
     init() {
         _ = metronome; _ = device; _ = effects; _ = transport; _ = meter; _ = recorder
-        _ = project
+        _ = project; _ = engine
         EffectAudioUnit.registerComponent()
         EffectRegistry.shared.registerBuiltIns()
         liveChain = [
@@ -155,240 +149,19 @@ class AudioManager: ObservableObject {
         stopMonitoring()
     }
 
-    // MARK: - Monitoring Engine
+    // MARK: - Monitoring Engine (forwarders — graph lives in EngineController)
 
-    func startMonitoring() {
-        if inputDevices.isEmpty { device.loadDevices() }
+    func startMonitoring() { engine.start() }
 
-        // Request mic permission off the main thread before touching the audio engine
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
-        case .notDetermined:
-            status = "Requesting microphone access…"
-            AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
-                DispatchQueue.main.async {
-                    if granted { self?.startMonitoring() }
-                    else { self?.status = "Microphone access denied — grant in System Settings" }
-                }
-            }
-            return
-        case .denied, .restricted:
-            status = "Microphone access denied — grant in System Settings"
-            return
-        case .authorized:
-            break
-        @unknown default:
-            break
-        }
-
-        guard let inID = selectedInputID,
-              let inDev = inputDevices.first(where: { $0.id == inID }) else {
-            status = "No input device selected"; return
-        }
-
-        let currentOutID = getDefaultAudioDevice(input: false)
-        if currentOutID == inID {
-            status = "Output = \(inDev.name) — change output to avoid loopback"; return
-        }
-
-        // Warn about feedback when using built-in mic with built-in speakers
-        let inName = inDev.name.lowercased()
-        let outName = nameOfDevice(currentOutID).lowercased()
-        if (inName.contains("macbook") || inName.contains("built-in") || inName.contains("microphone"))
-            && (outName.contains("macbook") || outName.contains("built-in") || outName.contains("speaker")) {
-            status = "Warning: built-in mic + speakers may cause feedback — use headphones"
-        }
-
-        let eng = AVAudioEngine()
-        // Select the input device on our own engine instead of the system default, so
-        // we don't take over the input for every other app.
-        setEngineInputDevice(eng, inID)
-        let hwFmt = eng.inputNode.inputFormat(forBus: 0)
-
-        guard hwFmt.sampleRate > 0, hwFmt.channelCount > 0 else {
-            status = "No usable input format — check Microphone permissions"
-            return
-        }
-
-        let stereoFmt = AVAudioFormat(standardFormatWithSampleRate: hwFmt.sampleRate, channels: 2) ?? hwFmt
-
-        let dryTap  = AVAudioMixerNode()   // pre-FX tap point for dry recording
-        let liveMix = AVAudioMixerNode()
-        let master  = AVAudioMixerNode()
-        eng.attach(dryTap); eng.attach(liveMix); eng.attach(master)
-
-        eng.connect(eng.inputNode,     to: eng.mainMixerNode, format: hwFmt)
-        eng.mainMixerNode.outputVolume = Float(inputVolume)
-
-        // Build chain from liveChain slots (Apple nodes only — kernels added async after start)
-        var chainNodes: [(id: UUID, node: AVAudioNode)] = []
-        var pendingKernelSlots: [(index: Int, slot: ChainSlot, mod: EffectModule)] = []
-        for (i, slot) in liveChain.enumerated() {
-            guard let mod = EffectRegistry.shared.module(for: slot.moduleID) else { continue }
-            if let node = mod.makeAudioNode?() {
-                eng.attach(node)
-                effects.setNodeBypass(node, bypass: !slot.enabled)
-                for (pid, val) in slot.parameters { mod.applyParameter?(node, pid, val) }
-                chainNodes.append((slot.id, node))
-            } else if mod.makeKernel != nil {
-                pendingKernelSlots.append((i, slot, mod))
-            }
-        }
-
-        // Connect chain: mainMixer → dryTap → [effect1 → effect2 → ...] → liveMix
-        // Recording taps dryTap (pre-FX); metering taps liveMix (post-FX).
-        eng.connect(eng.mainMixerNode, to: dryTap, format: stereoFmt)
-        var prev: AVAudioNode = dryTap
-        for entry in chainNodes {
-            eng.connect(prev, to: entry.node, format: stereoFmt)
-            prev = entry.node
-        }
-        eng.connect(prev, to: liveMix, format: stereoFmt)
-        eng.connect(liveMix, to: master, format: stereoFmt)
-
-        var players: [AVAudioPlayerNode] = []
-        var trkMixers: [AVAudioMixerNode] = []
-        for i in 0..<Theme.trackCount {
-            let player = AVAudioPlayerNode()
-            let trkMix = AVAudioMixerNode()
-            eng.attach(player); eng.attach(trkMix)
-            eng.connect(player, to: trkMix, format: stereoFmt)
-            eng.connect(trkMix, to: master, format: stereoFmt)
-            trkMix.outputVolume = Float(tracks[i].volume)
-            trkMix.pan = Float(tracks[i].pan)
-            players.append(player)
-            trkMixers.append(trkMix)
-        }
-
-        let metPlayer = AVAudioPlayerNode()
-        let metMix    = AVAudioMixerNode()
-        eng.attach(metPlayer); eng.attach(metMix)
-        eng.connect(metPlayer, to: metMix, format: stereoFmt)
-        eng.connect(metMix,    to: master, format: stereoFmt)
-        metMix.outputVolume = Float(metronomeVolume)
-
-        // Master limiter: prevents digital clipping on the output bus
-        let limiterDesc = AudioComponentDescription(
-            componentType: kAudioUnitType_Effect,
-            componentSubType: kAudioUnitSubType_PeakLimiter,
-            componentManufacturer: kAudioUnitManufacturer_Apple,
-            componentFlags: 0, componentFlagsMask: 0)
-        let limiter = AVAudioUnitEffect(audioComponentDescription: limiterDesc)
-        eng.attach(limiter)
-        let au = limiter.audioUnit
-        AudioUnitSetParameter(au, kLimiterParam_PreGain, kAudioUnitScope_Global, 0, 0, 0)
-        AudioUnitSetParameter(au, kLimiterParam_AttackTime, kAudioUnitScope_Global, 0, 0.012, 0)
-        AudioUnitSetParameter(au, kLimiterParam_DecayTime, kAudioUnitScope_Global, 0, 0.05, 0)
-        limiter.bypass = !masterLimiterEnabled
-        eng.connect(master, to: limiter, format: nil)
-        eng.connect(limiter, to: eng.outputNode, format: nil)
-        masterLimiterNode = limiter
-        master.outputVolume = Float(volume) * 0.6   // slight headroom to reduce clipping
-
-        // Metering tap: post-FX signal (meters show effected output)
-        meter.attach(postFX: liveMix)
-
-        // Recording tap: pre-FX dry signal (takes are recorded without effects)
-        recorder.attach(dryMixer: dryTap)
-
-        eng.prepare()
-        do { try eng.start() } catch {
-            status = "Engine failure: \(error.localizedDescription)"
-            return
-        }
-
-        engine       = eng
-        effects.setChainNodes(chainNodes)
-        outMixer     = liveMix
-        dryTapMixer  = dryTap
-        masterMixer  = master
-        transport.attach(players: players, mixers: trkMixers)
-        meter.installTrackTaps(trkMixers)
-        metronome.attach(player: metPlayer, mixer: metMix, sampleRate: stereoFmt.sampleRate)
-        isMonitoring = true
-
-        status = "\(inDev.name) → \(nameOfDevice(currentOutID))"
-        sampleRateString = "\(Int(hwFmt.sampleRate / 1000)) kHz · 24-bit · Stereo"
-        meter.startDisplayTimer()
-
-        // Async-insert kernel-based modules. AVAudioUnit instantiation is async and
-        // AUAudioUnit subclasses can't take init arguments, so the kernel factory and
-        // sample rate are passed via process-wide statics. Instantiate one at a time:
-        // otherwise a later slot overwrites the static before an earlier instantiation
-        // completes, and every kernel ends up with the last module's DSP.
-        instantiateKernels(Array(pendingKernelSlots), sampleRate: stereoFmt.sampleRate)
-    }
-
-    private func instantiateKernels(_ pending: [(index: Int, slot: ChainSlot, mod: EffectModule)],
-                                    sampleRate: Double) {
-        guard let head = pending.first else { return }
-        let rest = Array(pending.dropFirst())
-        guard let factory = head.mod.makeKernel else {
-            instantiateKernels(rest, sampleRate: sampleRate)
-            return
-        }
-        EffectAudioUnit.pendingKernelFactory = factory
-        EffectAudioUnit.pendingSampleRate = sampleRate
-        AVAudioUnit.instantiate(with: EffectAudioUnit.componentDesc, options: .loadInProcess) { [weak self] unit, _ in
-            DispatchQueue.main.async {
-                guard let self else { return }
-                EffectAudioUnit.pendingKernelFactory = nil
-                if let kernelNode = unit, self.isMonitoring,
-                   let eng = self.engine, let liveMix = self.outMixer {
-                    let fmt = liveMix.outputFormat(forBus: 0)
-                    // Insert after the last chain node, or after dryTapMixer
-                    let insertAfter: AVAudioNode
-                    if let last = self.effects.lastChainNode { insertAfter = last }
-                    else if let dryTap = self.dryTapMixer { insertAfter = dryTap }
-                    else { insertAfter = eng.mainMixerNode }
-                    eng.disconnectNodeOutput(insertAfter)
-                    eng.attach(kernelNode)
-                    eng.connect(insertAfter, to: kernelNode, format: fmt)
-                    eng.connect(kernelNode,  to: liveMix, format: fmt)
-                    kernelNode.auAudioUnit.shouldBypassEffect = !head.slot.enabled
-                    for (pid, val) in head.slot.parameters { head.mod.applyParameter?(kernelNode, pid, val) }
-                    self.effects.appendChainNode(id: head.slot.id, node: kernelNode)
-                }
-                self.instantiateKernels(rest, sampleRate: sampleRate)
-            }
-        }
-    }
-
-    func stopMonitoring() {
-        if isRecording { stopRecording() }
-        stopAll()
-        teardown()
-        isMonitoring = false
-        meter.resetDisplay()
-        status = "Stopped"
-    }
+    func stopMonitoring() { engine.stop() }
 
     func switchOutput(to id: AudioDeviceID) { device.switchOutput(to: id) }
 
-    func applyVolume(_ v: Double) {
-        volume = v
-        masterMixer?.outputVolume = Float(v) * 0.6
-    }
+    func applyVolume(_ v: Double) { engine.applyVolume(v) }
 
-    func applyInputVolume(_ v: Double) {
-        inputVolume = v
-        engine?.mainMixerNode.outputVolume = Float(v)
-    }
+    func applyInputVolume(_ v: Double) { engine.applyInputVolume(v) }
 
-    func toggleMasterLimiter() {
-        masterLimiterEnabled.toggle()
-        masterLimiterNode?.bypass = !masterLimiterEnabled
-    }
-
-    private func teardown() {
-        metronome.detach()
-        meter.detach()
-        recorder.detach()
-        engine?.stop()
-        effects.clearChainNodes()
-        engine = nil
-        outMixer = nil; dryTapMixer = nil; masterMixer = nil; masterLimiterNode = nil
-        transport.detach()
-    }
+    func toggleMasterLimiter() { engine.toggleMasterLimiter() }
 
     // MARK: - Chain Effects (forwarders — behaviour lives in EffectsChainController)
 
