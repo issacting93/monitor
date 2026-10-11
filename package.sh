@@ -1,26 +1,31 @@
 #!/bin/bash
-# package.sh — Build monitor_ui.swift into OP-XY Monitor.app
+# package.sh — Build monitor.swift into Tape 08.app
 set -euo pipefail
 
-APP_NAME="OP-XY Monitor"
-BUNDLE_ID="com.monitor.opxy"
-EXECUTABLE="monitor_ui"
-SOURCE="monitor_ui.swift"
+cd "$(dirname "$0")"
+
+APP_NAME="Tape 08"
+BUNDLE_ID="com.opxy.tape08"
+EXECUTABLE="Tape08"
+SOURCE="monitor.swift"
 APP_DIR="${APP_NAME}.app"
 CONTENTS="${APP_DIR}/Contents"
 MACOS="${CONTENTS}/MacOS"
 RESOURCES="${CONTENTS}/Resources"
 
-SDK="/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk"
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer
+export DEVELOPER_DIR
+SWIFTC="${DEVELOPER_DIR}/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc"
+SDK="${DEVELOPER_DIR}/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
 
 echo "==> Compiling ${SOURCE}..."
-swiftc -O "${SOURCE}" -o "${EXECUTABLE}" -sdk "${SDK}" 2>&1
+"${SWIFTC}" -O -parse-as-library "${SOURCE}" -o "${EXECUTABLE}" \
+    -target arm64-apple-macosx14.0 -sdk "${SDK}" -module-name Tape08 2>&1
 
 echo "==> Building ${APP_DIR}..."
 rm -rf "${APP_DIR}"
 mkdir -p "${MACOS}" "${RESOURCES}"
 
-# Move binary
 mv "${EXECUTABLE}" "${MACOS}/${EXECUTABLE}"
 
 # Info.plist
@@ -31,7 +36,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>${APP_NAME}</string>
+    <string>TAPE 08</string>
     <key>CFBundleDisplayName</key>
     <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>
@@ -49,7 +54,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>OP-XY Monitor needs microphone access to receive audio from your USB input device.</string>
+    <string>TAPE 08 needs microphone access to receive audio from your USB input device.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>LSUIElement</key>
@@ -58,7 +63,7 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Generate an app icon (orange circle with waveform) using Swift
+# Generate app icon (orange circle with waveform bars)
 cat > /tmp/gen_icon.swift <<'ICON'
 import AppKit
 
@@ -82,7 +87,6 @@ for (size, name) in sizes {
     img.lockFocus()
     let ctx = NSGraphicsContext.current!.cgContext
 
-    // Background: rounded rect with orange
     let rect = CGRect(x: 0, y: 0, width: size, height: size)
     let radius = size * 0.2
     let path = CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
@@ -90,13 +94,11 @@ for (size, name) in sizes {
     ctx.setFillColor(CGColor(red: 0xFF/255.0, green: 0x6B/255.0, blue: 0x1F/255.0, alpha: 1))
     ctx.fillPath()
 
-    // Dark inner circle
     let inset = size * 0.15
     let inner = rect.insetBy(dx: inset, dy: inset)
     ctx.setFillColor(CGColor(red: 0x26/255.0, green: 0x28/255.0, blue: 0x2B/255.0, alpha: 0.85))
     ctx.fillEllipse(in: inner)
 
-    // Waveform bars
     let barCount = 24
     let barWidth = (inner.width * 0.6) / CGFloat(barCount * 2 - 1)
     let startX = inner.midX - (CGFloat(barCount) * barWidth * 2 - barWidth) / 2
@@ -120,13 +122,13 @@ ICON
 
 ICONSET="${RESOURCES}/AppIcon.iconset"
 mkdir -p "${ICONSET}"
-swiftc /tmp/gen_icon.swift -o /tmp/gen_icon -sdk "${SDK}" 2>&1
+"${SWIFTC}" /tmp/gen_icon.swift -o /tmp/gen_icon -target arm64-apple-macosx14.0 -sdk "${SDK}" 2>&1
 /tmp/gen_icon "${ICONSET}"
 iconutil -c icns "${ICONSET}" -o "${RESOURCES}/AppIcon.icns" 2>&1
 rm -rf "${ICONSET}" /tmp/gen_icon /tmp/gen_icon.swift
 
 # Entitlements
-ENTITLEMENTS="${CONTENTS}/entitlements.plist"
+ENTITLEMENTS="/tmp/Tape08_entitlements.plist"
 cat > "${ENTITLEMENTS}" <<ENT
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
@@ -139,10 +141,8 @@ cat > "${ENTITLEMENTS}" <<ENT
 </plist>
 ENT
 
-# Ad-hoc code sign with entitlements (required for mic permission dialog)
 echo "==> Signing..."
 codesign --force --deep --sign - --entitlements "${ENTITLEMENTS}" "${APP_DIR}" 2>&1
 
 echo "==> Done: ${APP_DIR}"
 echo "    Open it with: open \"${APP_DIR}\""
-echo "    Or move it to /Applications."

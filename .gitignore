@@ -8,7 +8,13 @@ monitor
 .build/
 OPXYMultitrack/.build/
 OP-XY Monitor.app/
+Tape 08.app/
 Models/
+
+# Xcode
+DerivedData/
+xcuserdata/
+*.xcuserstate
 
 # Recordings
 *.wav
