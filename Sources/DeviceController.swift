@@ -106,8 +106,13 @@ final class DeviceController {
                 // MIDI 1.0 channel voice in UMP: type 0x2
                 guard (word >> 28) & 0xF == 0x2 else { return }
                 let status = (word >> 16) & 0xFF
+                // Note-on only. Every other channel voice message — note-off, CC,
+                // program change, aftertouch — names a channel too, and letting them
+                // all select a track means a knob sweep or a release fights the user's
+                // clicks. Velocity sits in the low byte; 0 is the running-status
+                // note-off convention whatever the status nibble says.
+                guard (status >> 4) & 0xF == 0x9, (word & 0xFF) > 0 else { return }
                 let channel = Int(status & 0x0F)
-                // Any channel voice message → select matching track
                 if channel < Theme.trackCount {
                     DispatchQueue.main.async { self.manager.selectedTrack = channel }
                 }
