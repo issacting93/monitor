@@ -42,8 +42,17 @@ final class EffectsChainController {
     // MARK: - Node bypass
 
     func setNodeBypass(_ node: AVAudioNode, bypass: Bool) {
+        // The AU's own property is set for every unit, custom or Apple. It is the
+        // documented contract, and the only one a custom kernel can act on: AVAudioEngine
+        // honours neither this nor `AVAudioUnitEffect.bypass` for a custom AUv3, so
+        // `EffectAudioUnit` implements the bypass in its render block and reads the flag
+        // this sets. Setting only `effect.bypass` left every kernel module — chorus,
+        // flanger, phaser, tremolo, and the rest — processing the monitor path whatever
+        // the slot said.
+        if let au = node as? AVAudioUnit { au.auAudioUnit.shouldBypassEffect = bypass }
+        // Apple's units take the AVAudioUnitEffect-level property as well; it is the
+        // switch AVAudioEngine actually acts on for them.
         if let effect = node as? AVAudioUnitEffect { effect.bypass = bypass }
-        else if let au = node as? AVAudioUnit { au.auAudioUnit.shouldBypassEffect = bypass }
     }
 
     // MARK: - Chain edits

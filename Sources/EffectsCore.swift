@@ -97,6 +97,12 @@ final class EffectAudioUnit: AUAudioUnit {
     // parameter switch; parameter writes block for at most one buffer of DSP.
     private let renderLock = UnfairLock()
 
+    // Holds the bypass state for the render block, behind `renderLock` like every other
+    // value the DSP reads. A class, not a Bool, so the render block can capture it
+    // without capturing `self` (which would be a retain cycle — the unit owns the block).
+    private final class BypassFlag { var bypassed = false }
+    private let bypassFlag = BypassFlag()
+
     static var pendingKernelFactory: ((Double) -> any AudioEffectKernel)?
     // Sample rate for the next instantiation. Set alongside pendingKernelFactory
     // (AUAudioUnit subclasses can't receive init arguments through instantiate()).
@@ -122,17 +128,32 @@ final class EffectAudioUnit: AUAudioUnit {
     override var inputBusses: AUAudioUnitBusArray { _inputBusArray }
     override var outputBusses: AUAudioUnitBusArray { _outputBusArray }
 
+    // Bypass is this unit's own job. `AVAudioUnitEffect.bypass` and `shouldBypassEffect`
+    // are both hints that AVAudioEngine acts on for Apple's units but *not* for a custom
+    // AUv3 — measured: with the flag set the render block is still called and the DSP
+    // still runs. So the property is overridden to record the state and the render block
+    // consults it, which is the contract `shouldBypassEffect` documents anyway.
+    override var shouldBypassEffect: Bool {
+        get { renderLock.withLock { bypassFlag.bypassed } }
+        set { renderLock.withLock { bypassFlag.bypassed = newValue } }
+    }
+
     override var internalRenderBlock: AUInternalRenderBlock {
         let kern = self.kernel
         let lock = self.renderLock
+        let flag = self.bypassFlag
         return { actionFlags, timestamp, frameCount, outputBusNumber, outputData, _, pullInputBlock in
             guard let pullInputBlock = pullInputBlock else { return noErr }
             let status = pullInputBlock(actionFlags, timestamp, frameCount, outputBusNumber, outputData)
             guard status == noErr else { return status }
 
+            // Still pull the input so the signal passes through unchanged; just don't
+            // process it. The pull has to happen either way or the node goes silent.
             let abl = UnsafeMutableAudioBufferListPointer(outputData)
             let ptrs = abl.compactMap { $0.mData?.assumingMemoryBound(to: Float.self) }
-            lock.withLock { kern.process(ptrs, frames: Int(frameCount)) }
+            lock.withLock {
+                if !flag.bypassed { kern.process(ptrs, frames: Int(frameCount)) }
+            }
             return noErr
         }
     }
