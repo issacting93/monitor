@@ -209,8 +209,15 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-            // Settings / FX are inspector drawers that float over the content, so
-            // showing them never squeezes (and clips) the tape grid at any window width.
+            // The drawer gets its own space rather than covering the tape: the workspace
+            // slides right by exactly the open drawer's width and the panel floats in the
+            // gap. Both are applied here, outside LoopGridView's GeometryReader, so the
+            // grid measures the reduced width and the lane arithmetic needs no change.
+            //
+            // Showing a panel still never *squeezes* the grid, which is what the overlay
+            // alone used to get wrong in the other direction — 660 pt of panel over a
+            // 1060 pt window sat on top of the track headers and the head unit.
+            .padding(.leading, audio.openDrawerWidth)
             .overlay(alignment: .leading) {
                 HStack(spacing: 0) {
                     if audio.showSettings { SettingsPanel(audio: audio) }
@@ -248,7 +255,11 @@ struct MonitorApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .frame(minWidth: 1060, minHeight: 720)
+                // 1280 rather than 1060: with the widest drawer open the workspace is
+                // pushed right by 400 pt, and the track-header column (200) plus the
+                // inspector column (410) and their gutters have to survive that before
+                // the lane region gets anything. At 1060 the lanes fell to their floor.
+                .frame(minWidth: 1280, minHeight: 720)
                 .background(Theme.bg)
         }
         .windowStyle(.hiddenTitleBar)

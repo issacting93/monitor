@@ -33,6 +33,30 @@ class AudioManager: ObservableObject {
     @Published var showEffects = false
     @Published var showSettings = false
 
+    // MARK: - Inspector drawers
+
+    /// The two inspector drawers occupy the same space to the left of the tape, so only
+    /// one can be open: opening either closes the other. They are driven through these
+    /// rather than by assigning the flags directly, so no call site can open both and
+    /// leave the tape pushed right by two widths with one panel hidden behind the other.
+
+    func toggleEffectsDrawer() {
+        showEffects.toggle()
+        if showEffects { showSettings = false }
+    }
+
+    func toggleSettingsDrawer() {
+        showSettings.toggle()
+        if showSettings { showEffects = false }
+    }
+
+    /// How far the workspace is pushed right to clear whichever drawer is open.
+    var openDrawerWidth: CGFloat {
+        if showEffects { return Theme.effectsDrawerWidth }
+        if showSettings { return Theme.settingsDrawerWidth }
+        return 0
+    }
+
     // Effect chain presets
     @Published var presetNames: [String] = []
     @Published var showPresetSave = false

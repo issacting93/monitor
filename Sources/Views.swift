@@ -371,9 +371,10 @@ struct TopBar: View {
                 }
             }
 
-            // FX + Settings
+            // FX + Settings — two drawers sharing one slot beside the tape, so the
+            // manager opens one and closes the other rather than stacking them.
             HStack(spacing: 6) {
-                Button(action: { audio.showEffects.toggle() }) {
+                Button(action: { audio.toggleEffectsDrawer() }) {
                     Text("FX")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .tracking(2)
@@ -382,7 +383,7 @@ struct TopBar: View {
                 }
                 .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: audio.showEffects, filled: audio.showEffects))
 
-                Button(action: { audio.showSettings.toggle() }) {
+                Button(action: { audio.toggleSettingsDrawer() }) {
                     Image(systemName: "gearshape")
                         .font(.system(size: 11, weight: .medium))
                         .padding(.horizontal, 8).padding(.vertical, 6)
@@ -1234,7 +1235,7 @@ struct SideEffectsPanelView: View {
                 .padding(.horizontal, 8).padding(.bottom, 16)
             }
         }
-        .frame(width: 400)
+        .frame(width: Theme.effectsDrawerWidth)
         .background(Theme.bg)
         .overlay(Rectangle().fill(Theme.textPrimary.opacity(0.10)).frame(width: 1), alignment: .trailing)
     }
@@ -2409,7 +2410,7 @@ struct SettingsPanel: View {
 
             Spacer()
         }
-        .frame(width: 260)
+        .frame(width: Theme.settingsDrawerWidth)
         .background(Theme.bg)
         .overlay(Rectangle().fill(Theme.textPrimary.opacity(0.10)).frame(width: 1), alignment: .trailing)
     }

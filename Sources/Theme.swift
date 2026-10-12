@@ -34,6 +34,13 @@ enum Theme {
     static let trackCount    = 8
     static let clipPeaks     = 64
 
+    /// Inspector drawer widths. The two drawers share one slot to the left of the tape
+    /// and the workspace is pushed right by whichever is open, so these are shared layout
+    /// constants rather than each panel's private business: the panel's own frame and the
+    /// inset that clears it are the same number, and must stay that way.
+    static let effectsDrawerWidth:  CGFloat = 400
+    static let settingsDrawerWidth: CGFloat = 260
+
     static let trackColors: [Color] = [
         Color(red: 0xFF/255.0, green: 0x5A/255.0, blue: 0x6A/255.0),
         Color(red: 0x6F/255.0, green: 0x8C/255.0, blue: 0xFF/255.0),
