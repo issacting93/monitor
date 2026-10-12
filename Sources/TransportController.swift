@@ -46,6 +46,11 @@ final class TransportController {
     // a later playback of the same track.
     private var playGenerations = [Int](repeating: 0, count: Theme.trackCount)
 
+    // Frames into the buffer that the current schedule starts from — non-zero only while
+    // a seeked tail is playing. A player node's sample clock always starts at 0, so
+    // without this the playhead a seek had just moved would snap back to the top.
+    private var playOffsets = [AVAudioFramePosition](repeating: 0, count: Theme.trackCount)
+
     // Undo/redo
     private var undoStack: [[TrackInfo]] = []
     private var redoStack: [[TrackInfo]] = []
@@ -167,7 +172,8 @@ final class TransportController {
                    let playerTime = playerNodes[i].playerTime(forNodeTime: nodeTime) {
                     let total = Double(buffer.frameLength)
                     if total > 0 {
-                        let cur = abs(Double(playerTime.sampleTime)).truncatingRemainder(dividingBy: total)
+                        let played = abs(Double(playerTime.sampleTime)) + Double(playOffsets[i])
+                        let cur = played.truncatingRemainder(dividingBy: total)
                         manager.live.playhead.trackProgress[i] = cur / total
                     }
                 }
@@ -191,10 +197,64 @@ final class TransportController {
 
     // Schedules a track's buffer respecting `loopEnabled`: loop mode repeats forever,
     // one-shot mode plays once and marks the track stopped (on main) when it ends.
-    private func scheduleTrackBuffer(_ i: Int, buffer: AVAudioPCMBuffer) {
+    // `fraction` starts playback partway in — see `seek`.
+    private func scheduleTrackBuffer(_ i: Int, buffer: AVAudioPCMBuffer,
+                                     fromFraction fraction: Double = 0) {
         guard i < playerNodes.count else { return }
         let player = playerNodes[i]
         player.stop()
+
+        let total = AVAudioFramePosition(buffer.frameLength)
+        let start = AVAudioFramePosition((Double(total) * min(max(fraction, 0), 1)).rounded())
+        // Starting partway in means playing the buffer's tail first and rejoining the
+        // normal loop only once that tail runs out. `.loops` on the tail alone would
+        // repeat it forever and never come back around to frame 0, so the rejoin has to
+        // come from the completion instead.
+        guard start > 0, start < total, let segment = tail(of: buffer, from: start) else {
+            scheduleWholeBuffer(i, player: player, buffer: buffer)
+            player.play()
+            return
+        }
+        playOffsets[i] = start
+        playGenerations[i] += 1
+        let gen = playGenerations[i]
+        player.scheduleBuffer(segment, at: nil, options: []) { [weak self] in
+            DispatchQueue.main.async {
+                guard let self, gen == self.playGenerations[i] else { return }
+                // Come back around only if the track is still looping. In one-shot mode
+                // the tail that just finished *was* the play, so the track ends there.
+                guard self.manager.loopEnabled, self.manager.tracks[i].isPlaying else {
+                    self.stopTrackLoop(i)
+                    return
+                }
+                self.scheduleWholeBuffer(i, player: player, buffer: buffer)
+                player.play()
+            }
+        }
+        player.play()
+    }
+
+    /// A copy of `buffer` from `start` to its end, or nil if the format has no float
+    /// channel data. `AVAudioPlayerNode` starts a *buffer* at frame 0 — only
+    /// `scheduleSegment` can start partway in, and it takes a file, which would drop the
+    /// anti-click fades `loadTrackBuffer` bakes into the buffer. So a seek hands the
+    /// player the tail as a buffer of its own, fades included. The copy is a few MB for
+    /// a normal take; a drag commits one per track on release, not per drag event.
+    private func tail(of buffer: AVAudioPCMBuffer, from start: AVAudioFramePosition) -> AVAudioPCMBuffer? {
+        let count = AVAudioFrameCount(AVAudioFramePosition(buffer.frameLength) - start)
+        guard count > 0,
+              let out = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: count),
+              let src = buffer.floatChannelData, let dst = out.floatChannelData else { return nil }
+        out.frameLength = count
+        for ch in 0..<Int(buffer.format.channelCount) {
+            dst[ch].update(from: src[ch].advanced(by: Int(start)), count: Int(count))
+        }
+        return out
+    }
+
+    /// Queues a whole buffer on an already-stopped player, per `loopEnabled`.
+    private func scheduleWholeBuffer(_ i: Int, player: AVAudioPlayerNode, buffer: AVAudioPCMBuffer) {
+        playOffsets[i] = 0
         if manager.loopEnabled {
             player.scheduleBuffer(buffer, at: nil, options: .loops, completionHandler: nil)
         } else {
@@ -207,7 +267,38 @@ final class TransportController {
                 }
             })
         }
-        player.play()
+    }
+
+    // MARK: - Position
+
+    /// Moves playback to `fraction` of each track's own clip — the same normalised
+    /// position the per-track playhead is drawn from, because every track loops its own
+    /// take independently and there is no single tape position to seek to.
+    ///
+    /// While something is playing, those tracks are re-scheduled from the new frame, so
+    /// dragging back to the left restarts the loop from the top without a stop. While
+    /// nothing is playing there is nothing to re-schedule, so the position is parked on
+    /// `seekFraction` and the next PLAY starts from there.
+    func seek(toFraction f: Double) {
+        // A count-in or a take is timed by the recorder, not by these buffers, so moving
+        // the playhead mid-take would only desync the display from what is being written.
+        guard !manager.isRecording, !manager.countingIn else { return }
+        let clamped = min(max(f, 0), 1)
+
+        let playing = (0..<manager.tracks.count).filter { manager.tracks[$0].isPlaying }
+        if playing.isEmpty {
+            manager.seekFraction = clamped
+            for i in 0..<manager.tracks.count where !manager.tracks[i].clips.isEmpty {
+                manager.live.playhead.trackProgress[i] = clamped
+            }
+        } else {
+            manager.seekFraction = nil
+            for i in playing {
+                guard let buffer = trackBuffers[i] else { continue }
+                scheduleTrackBuffer(i, buffer: buffer, fromFraction: clamped)
+            }
+        }
+        manager.status = "Position \(Int((clamped * 100).rounded()))%"
     }
 
     func startTrackLoop(_ i: Int) {
@@ -225,7 +316,17 @@ final class TransportController {
             return
         }
         guard let buffer = trackBuffers[i] else { return }
-        scheduleTrackBuffer(i, buffer: buffer)
+        // A position parked while stopped is where the track should begin, and starting
+        // consumes it: the tracks that stay stopped have no playhead on screen any more,
+        // so they go back to the start rather than lingering where nothing draws them.
+        // SPLIT reads this value, and an invisible cut point is worse than none.
+        scheduleTrackBuffer(i, buffer: buffer, fromFraction: manager.seekFraction ?? 0)
+        if manager.seekFraction != nil {
+            manager.seekFraction = nil
+            for j in 0..<manager.tracks.count where j != i && !manager.tracks[j].isPlaying {
+                manager.live.playhead.trackProgress[j] = 0
+            }
+        }
         manager.tracks[i].isPlaying = true
         refreshTrackMixers()
         if manager.metronomeEnabled && !manager.metronome.isRunning { manager.metronome.start() }
@@ -284,11 +385,13 @@ final class TransportController {
             }
             return
         }
+        let from = manager.seekFraction ?? 0
         for i in 0..<manager.tracks.count where !manager.tracks[i].clips.isEmpty {
             guard let buffer = trackBuffers[i] else { continue }
-            scheduleTrackBuffer(i, buffer: buffer)
+            scheduleTrackBuffer(i, buffer: buffer, fromFraction: from)
             manager.tracks[i].isPlaying = true
         }
+        manager.seekFraction = nil
         refreshTrackMixers()
         manager.isPlaying = true
         manager.metronome.start()
@@ -310,6 +413,9 @@ final class TransportController {
             manager.live.playhead.trackProgress[i] = 0
         }
         manager.isPlaying = false
+        // STOP returns to the start, as the transport hint says — so a position placed by
+        // hand goes with the progress it was showing.
+        manager.seekFraction = nil
         manager.status = wasCountingIn ? "Count-in cancelled" : "Stopped"
     }
 

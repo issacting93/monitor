@@ -101,6 +101,15 @@ class AudioManager: ObservableObject {
 
     @Published var isPlaying = false
 
+    /// A position the timeline was dragged to while nothing was playing, as a fraction
+    /// of each track's own clip; nil whenever the playhead is following playback, or has
+    /// never been placed.
+    ///
+    /// Optional rather than defaulting to 0, because "parked at the start" and "never
+    /// placed" need different markers: the first draws a stationary playhead, the second
+    /// draws none until something plays.
+    @Published var seekFraction: Double? = nil
+
     // Project persistence
     @Published var projectURL: URL? = nil
     @Published var projectName: String = "Untitled"
@@ -256,6 +265,8 @@ class AudioManager: ObservableObject {
     func playAll() { transport.playAll() }
 
     func stopAll() { transport.stopAll() }
+
+    func seek(toFraction fraction: Double) { transport.seek(toFraction: fraction) }
 
     func beginUndoGesture() { transport.beginUndoGesture() }
 

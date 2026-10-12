@@ -560,13 +560,17 @@ struct WaveformLaneView: View {
                     .offset(x: clipX + 1, y: 1)
                 }
 
-                // Playhead
-                if track.isPlaying {
+                // Playhead. Drawn on a stopped track too while a position is parked on it:
+                // that marker is the only feedback a ruler drag leaves behind, and it is
+                // where PLAY will pick up from.
+                let parked = audio.seekFraction
+                if track.isPlaying || parked != nil {
                     let lastClip = track.clips.last
                     let clipDur = lastClip?.duration ?? 1
-                    let playX = CGFloat(playhead.trackProgress[index]) * CGFloat(clipDur / secsPerBar) * barWidth
+                    let fraction = track.isPlaying ? playhead.trackProgress[index] : (parked ?? 0)
+                    let playX = CGFloat(fraction) * CGFloat(clipDur / secsPerBar) * barWidth
                     Rectangle()
-                        .fill(Theme.textPrimary)
+                        .fill(Theme.textPrimary.opacity(track.isPlaying ? 1 : 0.5))
                         .frame(width: 1)
                         .offset(x: playX)
                         .frame(maxHeight: .infinity)
@@ -708,8 +712,14 @@ struct BarRulerView: View {
     let secsPerBar: Double
     let rulerWidth: CGFloat
 
+    /// Where the pointer is during a drag. The seek itself is committed on release:
+    /// re-scheduling eight players on every drag event would restart them faster than
+    /// they can render, and a scrub that stutters is worse than one that lands on release.
+    @State private var dragFraction: Double? = nil
+
     var body: some View {
         let barWidth = rulerWidth / CGFloat(totalBars)
+        let loopSpan = CGFloat(max(longestClipBars(), 1)) * barWidth
 
         ZStack(alignment: .leading) {
             ForEach(Array(stride(from: 1, through: totalBars, by: 4)), id: \.self) { bar in
@@ -740,8 +750,38 @@ struct BarRulerView: View {
                 p.closeSubpath()
             }
             .fill(Theme.textPrimary)
+
+            // The dragged position, and the one a previous drag parked. Both are drawn
+            // over the span the loop bracket occupies, which is what makes the pointer
+            // and the playhead agree.
+            if !audio.isRecording && !audio.countingIn, let marker = dragFraction ?? audio.seekFraction {
+                let mx = CGFloat(marker) * loopSpan
+                Path { p in
+                    p.move(to: CGPoint(x: mx, y: 2))
+                    p.addLine(to: CGPoint(x: mx + 5, y: 8))
+                    p.addLine(to: CGPoint(x: mx, y: 14))
+                    p.addLine(to: CGPoint(x: mx - 5, y: 8))
+                    p.closeSubpath()
+                }
+                .fill(dragFraction != nil ? Theme.accent : Theme.textPrimary.opacity(0.6))
+            }
         }
         .frame(width: rulerWidth, height: 18)
+        .contentShape(Rectangle())
+        // macOS ScrollViews pan with the wheel, not with a mouse drag, so this does not
+        // cost the timeline its scrolling.
+        .gesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { v in
+                    guard !audio.isRecording, !audio.countingIn, loopSpan > 0 else { return }
+                    dragFraction = min(max(Double(v.location.x / loopSpan), 0), 1)
+                }
+                .onEnded { v in
+                    dragFraction = nil
+                    guard !audio.isRecording, !audio.countingIn, loopSpan > 0 else { return }
+                    audio.seek(toFraction: Double(v.location.x / loopSpan))
+                }
+        )
     }
 
     private func longestClipBars() -> Int {
