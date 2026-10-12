@@ -505,7 +505,7 @@ struct WaveformLaneView: View {
                     let clipX = CGFloat(prevOffset / secsPerBar) * barWidth
 
                     ZStack(alignment: .topLeading) {
-                        RoundedRectangle(cornerRadius: 3)
+                        RoundedRectangle(cornerRadius: 4)
                             .stroke(color.opacity(0.4), lineWidth: 1)
                         Rectangle()
                             .fill(color)
@@ -669,7 +669,7 @@ struct TrackControlsView: View {
                 }
             }
             .frame(width: 40, height: 6)
-            .cornerRadius(2)
+            .cornerRadius(4)
         }
         .padding(.horizontal, 10)
         .frame(width: 410)
@@ -699,7 +699,7 @@ struct BarRulerView: View {
                 let longestBars = longestClipBars()
                 if longestBars > 0 {
                     let lw = CGFloat(longestBars) * barWidth
-                    RoundedRectangle(cornerRadius: 2)
+                    RoundedRectangle(cornerRadius: 4)
                         .stroke(Theme.loopGreen, lineWidth: 1.5)
                         .frame(width: lw, height: 12)
                         .position(x: lw / 2, y: 8)

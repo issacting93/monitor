@@ -164,7 +164,7 @@ struct IOSTrackRow: View {
                     }
                 }
                 .frame(height: 4)
-                .cornerRadius(2)
+                .cornerRadius(4)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
