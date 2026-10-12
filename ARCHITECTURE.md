@@ -8,7 +8,7 @@ shared audio core.
 - **UI:** SwiftUI (separate macOS and iPad view layers)
 - **Audio:** AVFoundation (`AVAudioEngine`) + CoreAudio HAL / `AVAudioSession` (device layer) +
   CoreMIDI (track follow)
-- **Source:** 23 files in `Sources/`, ~7,200 lines (shared core + both UIs)
+- **Source:** 25 files in `Sources/`, ~8,340 lines (shared core + both UIs)
 - **Build paths:** `package.sh` (macOS, head-less `swiftc`), `Tape08/` (macOS Xcode project),
   `Tape08iPad/` (iPad Xcode project)
 
@@ -104,9 +104,9 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
 | M / S | Mute / Solo selected | ⌘O | Open project |
 | 1–8 | Select track | ⌘E | Export selected track |
 | , | Toggle metronome | ⌘T | Split clip at playhead |
-| Tab | Arrange ⇄ Monitor view | ⌘D | Duplicate last clip |
+| Tab | Arrange ⇄ Monitor view | ⌘D | Duplicate the selected clip |
 | F | Toggle playhead follow | ⌘+ / ⌘− | Timeline zoom in / out |
-| Return | Stop all | | |
+| Return | Stop all | ⌘1–⌘8 | Select take N on that track |
 
 ---
 
@@ -350,30 +350,30 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 
 | File | Lines | Platform | Responsibility |
 |------|------:|----------|----------------|
-| `Views.swift` | 2278 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
-| `Views_iOS.swift` | 444 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
+| `Views.swift` | 2469 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
+| `TransportController.swift` | 1074 | shared | Playback, undo/redo, clip editing & selection, mixdown |
 | `EffectsKernels.swift` | 763 | shared | Custom DSP kernels |
-| `TransportController.swift` | 638 | shared | Playback, undo/redo, clip editing, mixdown |
 | `EffectsCore.swift` | 503 | shared | Module/registry/chain/AU-host core + Apple module defs |
-| `EngineController.swift` | 318 | shared | `AVAudioEngine` graph spine + async kernel insert |
-| `AudioManager.swift` | 269 | shared | The `ObservableObject` facade: published state + forwarders |
-| `LiveState.swift` | 21 | shared | 60 Hz display state (meters / waveform / track progress) kept out of `@Published` |
-| `ProjectController.swift` | 265 | shared (`[mac]` panels) | `.xyproj` save/load |
-| `RecordingController.swift` | 246 | shared | Count-in + dry capture |
-| `App.swift` | 229 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
+| `Views_iOS.swift` | 446 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
+| `AudioManager.swift` | 347 | shared | The `ObservableObject` facade: published state + forwarders |
+| `EngineController.swift` | 326 | shared | `AVAudioEngine` graph spine + async kernel insert |
+| `ProjectController.swift` | 281 | shared (`[mac]` panels) | `.xyproj` save/load |
+| `RecordingController.swift` | 273 | shared | Count-in + dry capture |
+| `App.swift` | 248 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
+| `CoreAudioDevices.swift` | 217 | `[mac]` | CoreAudio HAL enumeration/selection helpers + the aggregate device for clock-master I/O |
 | `MetronomeController.swift` | 198 | shared | Click scheduling + tap tempo |
-| `EffectsChainController.swift` | 190 | shared | Chain mutations + presets |
-| `MeterController.swift` | 163 | shared | Meter taps + display smoothing |
-| `Models.swift` | 132 | shared | Value types + `Codable` DTOs + `DeviceID` |
-| `DeviceController.swift` | 131 | shared | Device discovery + MIDI track follow (delegates to `io`) |
-| `DeviceIO_iOS.swift` | 100 | `[iOS]` | `AVAudioSession` provider + route/interruption observers |
-| `CoreAudioDevices.swift` | 71 | `[mac]` | CoreAudio HAL enumeration/selection helpers |
-| `Theme.swift` | 49 | shared | Palette + layout constants |
-| `Support.swift` | 48 | shared | `UnfairLock`, `computePeaks`, timestamp formatter |
-| `DeviceIO_macOS.swift` | 45 | `[mac]` | `CoreAudioDeviceProvider` |
-| `AudioDeviceProviding.swift` | 39 | shared | The device-I/O protocol + `DeviceChange` |
-| `PlatformPaths.swift` | 35 | shared | `tracksRoot` / `presetsDir` / `initialSaveLocation` per platform |
+| `EffectsChainController.swift` | 193 | shared | Chain mutations + presets |
+| `MeterController.swift` | 168 | shared | Meter taps + display smoothing |
+| `DeviceController.swift` | 132 | shared | Device discovery + MIDI track follow (delegates to `io`) |
+| `Models.swift` | 131 | shared | Value types + `Codable` DTOs + `DeviceID` |
+| `DeviceIO_iOS.swift` | 104 | `[iOS]` | `AVAudioSession` provider + route/interruption observers |
+| `Support.swift` | 97 | shared | `UnfairLock`, `computePeaks`, unique filename stems, off-main helper |
+| `DeviceIO_macOS.swift` | 87 | `[mac]` | `CoreAudioDeviceProvider` |
 | `SaveLocation.swift` | 76 | `[mac]` | Sandboxed save-folder: security-scoped bookmark round-trip, first-run prompt state |
+| `Theme.swift` | 49 | shared | Palette + layout constants |
+| `AudioDeviceProviding.swift` | 47 | shared | The device-I/O protocol + `DeviceChange` |
+| `PlatformPaths.swift` | 46 | shared | `tracksRoot` / `presetsDir` / `initialSaveLocation` per platform |
+| `LiveState.swift` | 45 | shared | 60 Hz display state: the `MeterState` / `TrackMeterState` / `PlayheadState` publishers kept out of `@Published` |
 | `App_iOS.swift` | 16 | `[iOS]` | iPad `@main` entry |
 
 ---
@@ -384,9 +384,10 @@ Full detail and severities are in [to_fix.md §8](to_fix.md). Highest-impact **o
 
 - **UI-1** — the tape timeline clips when the settings + FX panels are open (fixed-width panels).
 - **U1** — count-in is timed by a `Timer`, not aligned to the metronome grid.
-- **C4** — trim/split/duplicate/import, mixdown and project-save still do I/O on the main thread.
-- **H3** — orphaned audio files accumulate (undo/clear don't delete unreferenced WAVs).
-- Edit operations (trim/split/duplicate) only ever act on a track's **last** clip.
+- **U2** — only a track's **last** clip is decoded and played, so split-at-playhead is confined to it
+  and a stopped take has no stationary playhead to cut at.
+- **H5** — a multichannel input interface meets a stereo graph on connect (no explicit downmix).
+- **H6** — project load builds file paths from `project.json` without sanitising them.
 
 Resolved on 2026-10-11 (see `to_fix.md` §8.9): **C1** (param/render race), **C2** (async-insert
 epoch), **C3** (render-thread file writes), **C5** (double-engine leak on start-while-monitoring).
@@ -396,6 +397,19 @@ lock-free one.
 Resolved on 2026-10-12: **P1** (the 60 Hz display tick re-rendered the whole view tree — the display
 state is now three focused publishers, `MeterState` / `TrackMeterState` / `PlayheadState`, and each
 view observes only the one it draws; the grid's own body no longer re-evaluates on the tick).
+
+Also resolved on 2026-10-12: **H1** (clip fades are applied), **H3** (session-created audio files are
+swept once nothing references them, exempting anything an in-flight edit has written), **H4**
+(built-in presets are seeded only when absent), **C4** (trim / split / duplicate / import /
+record-stop / export / mixdown / project-save now run their file work off the main thread and apply
+on it, guarded by an edit epoch and a trim-editor session token so superseded work is dropped rather
+than landing on newer state) and **H2** (a take can be selected by clicking it in the timeline or
+with ⌘1–⌘8, and TRIM / DUP / IMPORT / EXPORT act on the selection rather than always the last take;
+`editTargetIndex` resolves it at use time and falls back to the last take, every surface that names
+the current take resolves through it, and a selection the user moves mid-edit is not overwritten
+when the edit lands. SPLIT stays confined to the last take — see **U2**).
+
+Stage 0d's clock-master change for aggregate I/O has **not** been run on hardware.
 
 **iPad MVP:** monitoring, metering, loop recording, the effect chain, metronome and undo/redo work;
 trim/split/duplicate, project save/load, export and mixdown are deferred (status no-op), and

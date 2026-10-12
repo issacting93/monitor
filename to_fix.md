@@ -396,14 +396,14 @@ codebase. The shipped app is different: a fixed linear **effect chain** of `Effe
 
 | ID | Plan item | Status in current code | Where |
 |----|-----------|------------------------|-------|
-| UI-1 | Tape UI doesn't resize when panels shown | **Still valid** — `LoopGridView` reserves fixed `headerW 200 + controlsW 410 + hPad 56`; `SideEffectsPanelView` is `.frame(width: 400)` and `SettingsPanel` `.frame(width: 260)`. Both panels open needs ≈1426 pt; window `minWidth` is 1060 → the lanes clip/compress. | `Views.swift:714-736`, `Views.swift:1093`, `Views.swift:2249`, `App.swift:218` |
-| UI-2 | No count-in | **Done** — `countInBars` + transport "CIN" cycle + `RecordingController` count-in timer. (Timing concern below, U1.) | `TransportController.swift:1327-1342`, `RecordingController.swift:50-72` |
-| UI-3 | Cannot split a recorded track | **Done** — `splitClipAtPlayhead` (⌘T). Limited: only last clip, only while playing (U2). | `TransportController.swift:313-380` |
+| UI-1 | Tape UI doesn't resize when panels shown | **Still valid** — `LoopGridView` reserves fixed `headerW 200 + controlsW 410 + hPad 56`; `SideEffectsPanelView` and `SettingsPanel` have their own fixed widths. Both panels open needs ≈1426 pt; window `minWidth` is 1060 → the lanes clip/compress. | `LoopGridView` `Views.swift:756` (constants `:775-777`), `SideEffectsPanelView` `:998`, `SettingsPanel` `:2200`, `App.swift:238` |
+| UI-2 | No count-in | **Done** — `countInBars` + transport "CIN" cycle (`Views.swift:1455`) + `RecordingController` count-in timer. (Timing concern below, U1.) | `RecordingController.swift:151` (count-in `:156-161`) |
+| UI-3 | Cannot split a recorded track | **Done** — `splitClipAtPlayhead` (⌘T). Limited: only the last take, only while playing (U2). | `TransportController.swift:588` |
 | UI-4 | Remove neural amp | **Already absent** — no NAM/amp code anywhere. Nothing to do. | — |
-| UI-5 | Touch zones too small | **Partially** — many hit areas are 18–28 pt (zoom `20×18`, move/delete `24×24`, track M/S/play `28×28`). If touch/pointer is a target, raise to ≥44 pt with transparent padding. | `Views.swift:743-777, 1120-1167, 585-607` |
-| UI-6 | Dials look weird | **Done** — `ArcKnob` is a 270° sweep from 135°, indicator dot, value readout. Needs a visual re-check only. | `Views.swift:46-165` |
-| UI-7 | L/R levels too far apart | **Done** — Arrange `VerticalMeter`s are `HStack(spacing: 4)`. | `Views.swift:1613-1615` |
-| UI-8 | Input/Position, Output/Loop misaligned | **Done** — aligned 2×2 grid with a fixed 100 pt first column. | `Views.swift:1489-1508` |
+| UI-5 | Touch zones too small | **Partially** — many hit areas are 18–28 pt (zoom, move/delete, track M/S/play). If touch/pointer is a target, raise to ≥44 pt with transparent padding. | `Views.swift` (`VerticalMeter` `:430`, `TrackControlsView` `:617`, lane controls) |
+| UI-6 | Dials look weird | **Done** — `ArcKnob` is a 270° sweep from 135°, indicator dot, value readout. Needs a visual re-check only. | `Views.swift:48` |
+| UI-7 | L/R levels too far apart | **Done** — Arrange `VerticalMeter`s are `HStack(spacing: 4)`. | `Views.swift:430`, `:1556` |
+| UI-8 | Input/Position, Output/Loop misaligned | **Done** — aligned 2×2 grid with a fixed 100 pt first column. | `Views.swift:1556` |
 | CL-1 | Unused code | **Valid** — see §8.5 for the concrete list. | — |
 
 **Section 2 (modular plugin bundles / `AudioGraph` / C++ bridge) does not describe the shipped
@@ -413,143 +413,171 @@ Recommend rebaselining (§8.6) rather than building Section 2 as written.
 ## 8.1 Correctness & concurrency (address before trusting a live run)
 
 **C1 — Effect parameters race the audio render thread. ✅ FIXED** `EffectAudioUnit.setKernelParameter`
-(`EffectsCore.swift:153-155`) is called from the main thread and writes plain `var` fields on the
-kernel (e.g. `EffectsKernels.swift:59-68`, `335-345`), while `internalRenderBlock`
-(`EffectsCore.swift:139-151`) calls `kernel.process(...)` on the render thread and reads those same
-fields. No atomics, no lock. Individually word-sized `Float`s, so mostly benign in practice, but
-it is a genuine data race and multi-field updates (e.g. `TapeSaturationKernel`) can tear.
-→ **Do:** publish params through an atomic snapshot / lock-free ring the render block drains, or at
-minimum use `OSAllocatedUnfairLock`-guarded param storage per kernel (matches the plan's §5 note).
+(`EffectsCore.swift:163`) is called from the main thread and writes plain `var` fields on the
+kernel, while `internalRenderBlock` (`EffectsCore.swift:148`) calls `kernel.process(...)` on the
+render thread and reads those same fields. No atomics, no lock. Individually word-sized `Float`s, so
+mostly benign in practice, but it is a genuine data race and multi-field updates (e.g.
+`TapeSaturationKernel`) can tear.
+→ **Fixed by:** `EffectAudioUnit` gained a `renderLock` (`UnfairLock`, `Support.swift`) that both
+`setKernelParameter` and the render block's `kernel.process` take, so a knob move can't tear a value
+the DSP is reading. See §8.9.
 
-**C2 — Async kernel insert is not cancelled by stop/start. ✅ FIXED** `instantiateKernels`
-(`EngineController.swift:189-222`) is an async recursion that shares the *process-wide* statics
-`EffectAudioUnit.pendingKernelFactory` / `pendingSampleRate` (`EffectsCore.swift:114-117`). A chain
-edit calls `rebuildChain()` (`EffectsChainController.swift:105-109`) → `stopMonitoring()` then
-`startMonitoring()`. If a stop/start lands while an instantiation is in flight, a second recursion
-starts and both write the shared statics → a kernel can be built with the wrong DSP (exactly the bug
-the serialization comment warns about, for the rebuild case). The completion also attaches to
-`self.outMixer`/`self.engine`, which may now be a *different* engine at a *different* sample rate.
-→ **Do:** carry a generation/epoch id; abort stale completions; don't share process-wide statics —
-pass the factory through the AU's `AudioComponentInstantiationOptions`/user-data or a
-per-instantiation queue.
+**C2 — Async kernel insert is not cancelled by stop/start. ✅ FIXED** The kernel insert was an async
+recursion sharing the *process-wide* statics `EffectAudioUnit.pendingKernelFactory` /
+`pendingSampleRate` (`EffectsCore.swift:123`, `:126`), so a chain edit's `rebuildChain()`
+(`EffectsChainController.swift:100`) → `stopMonitoring()`/`startMonitoring()` could start a second
+recursion whose completion attached to a *different* engine at a *different* sample rate.
+→ **Fixed by:** the insert now goes through `enqueueKernels` → `pumpKernelQueue`
+(`EngineController.swift:216`, `:228`), which allows **at most one instantiation in flight
+process-wide**, and each graph build carries a `kernelEpoch` (`:28`) so a completion from a
+torn-down or restarted graph is discarded. See §8.9.
 
 **C3 — Recording writes to disk from the render thread. ✅ FIXED** The dry tap closure
-(`RecordingController.swift:33-38`) calls `AVAudioFile.write` inside `installTap`, i.e. on the audio
+(`RecordingController.swift:60`) called `AVAudioFile.write` inside `installTap`, i.e. on the audio
 thread. File I/O and allocation there is a classic drop-out source.
-→ **Do:** copy the tap buffer into a lock-free ring and drain it on a background writer queue.
+→ **Fixed by:** the tap now copies frames into a fixed interleaved ring (no I/O, no per-call
+allocation on the render thread) that a background queue drains to disk. See §8.9.
 
-**C4 — Heavy I/O still on the main thread in edit/export paths.** `loadTrackBuffer` and project
-load were moved off-main (good), but `computePeaks` is still called synchronously on main in
-`applyTrim` (`TransportController.swift:302`), `splitClipAtPlayhead` (`:367, :369`),
-`duplicateClip` (`:403`), `importAudioFile` (`:456`) and `RecordingController.stop` (`:116`);
-`bounceMixdown` mixes every clip on main (`:482-533`); project save copies audio on main
-(`ProjectController.swift:55-65`). On long takes this stalls the UI.
+**C4 — Heavy I/O still on the main thread in edit/export paths. ✅ FIXED** `computePeaks` was called
+synchronously on main in `applyTrim`, `splitClipAtPlayhead`, `duplicateClip`, `importAudioFile` and
+`RecordingController.stop`; `bounceMixdown` mixed every clip on main; project save copied audio on
+main. On long takes this stalled the UI.
 → **Do:** route all of these through the existing off-main pattern (`loadTrackBuffer`) and hop back
 to main to publish.
+→ **Fixed by:** every one of those paths now captures what its work needs by value, runs the file
+work on `DispatchQueue.global(qos: .userInitiated)`, and applies back on main through
+`AudioManager.runOffMain(busy:work:apply:)`. Undo history is unchanged — `pushUndo()` still runs on
+main against pre-mutation state, immediately before the mutation — and each apply re-resolves its
+target by clip id and re-checks an edit epoch, so work superseded by undo/redo/clear/load is dropped
+and the file it wrote is abandoned rather than leaked. `busyEdit` publishes while work is in flight
+and the views disable the controls that start edits; its depth is reference-counted so overlapping
+edits can't clear it early.
 
 **C5 — `start()` while already monitoring built a second engine. ✅ FIXED.** `EngineController.start()`
-built a fresh `AVAudioEngine` on every call; the Monitor view's input picker calls
-`startMonitoring()` without stopping first (`Views.swift:1813-1816`), leaking the running engine and
-leaving **two live graphs (doubled audio)**. Fixed by tearing down first when already monitoring
-(`EngineController.swift`, top of `start()`).
+(`EngineController.swift:39`) built a fresh `AVAudioEngine` on every call; the Monitor view's input
+picker calls `startMonitoring()` without stopping first (`Views.swift:1949`), leaking the running
+engine and leaving **two live graphs (doubled audio)**. Fixed by tearing down first when already
+monitoring (top of `start()`).
 
 ## 8.2 Robustness & data integrity
 
-**H1 — Non-functional clip fades.** `TrackClip.fadeIn/fadeOut` (`Models.swift:32-33, 53-55`) are
-stored, copied on duplicate (`TransportController.swift:404-405`), and never applied — playback and
-mixdown ignore them. The "anti-click fade" comment is misleading; entries/exits can still click.
+**H1 — Non-functional clip fades. ✅ FIXED** `TrackClip.fadeIn/fadeOut` (`Models.swift`) were
+stored, copied on duplicate, and never applied — playback and mixdown ignored them, so entries and
+exits could still click.
 → **Do:** apply the fades in `bounceMixdown` and at schedule time, or delete the fields.
+→ **Fixed by:** `applyClipFades` (`Support.swift:61`) is applied both at schedule time
+(`loadTrackBuffer`, `TransportController.swift:1036`, call at `:1056`) and in `bounceMixdown` (`:898`,
+call at `:924`), so playback and export agree.
 
-**H2 — Edits only ever touch the last clip.** `openTrimEditor`/`applyTrim`
-(`TransportController.swift:260, 275-309`), `splitClipAtPlayhead` (`:318, 324`) and
-`duplicateClip` (`:387`) all use `clips.last` and ignore `clipIndex`. There is no clip-selection in
-the UI, so a track with several takes can only edit the most recent. `duplicateClip`'s `clipIndex`
-parameter is never passed by any caller.
+**H2 — Edits only ever touch the last clip. ✅ FIXED** `openTrimEditor`/`applyTrim`,
+`splitClipAtPlayhead`, `duplicateClip` and `exportTrack` all used `clips.last`, and there was no clip
+selection in the UI, so a track with several takes could only edit the most recent.
 → **Do:** add clip selection (or per-clip actions), or document the last-clip-only rule.
+→ **Fixed by:** `AudioManager.selectedClipID` (a `UUID`, deliberately outside `tracks` so selecting
+a take is never an undo step) is set by clicking a clip in the timeline or with ⌘1–⌘8, and
+`editTargetIndex(on:)` resolves it at use time, falling back to the last take when it doesn't — the
+behaviour every edit had before selection existed. TRIM, DUP, IMPORT and EXPORT now act on the
+selection; every surface that names the current take (lane highlight, track header, transport bar,
+FX header, trim header, Monitor's selected-track readout) resolves through the same function, so
+none can contradict the edit keys. The selection is re-pointed when an op installs a clip, but only
+while the user hasn't moved it since that op was dispatched (these applies run off-main), and it is
+cleared on `clearAll` and project load. **Split is still confined to the last clip** — the playhead
+is a fraction of the clip the engine has loaded — so it targets the selection only when that is the
+last take and posts a status otherwise; that limit is U2. A successful split re-points at the second
+half, which is the new last take, so ⌘T stays repeatable.
 
-**H3 — Orphaned audio files accumulate.** Undo/`clearAll`/trim/split/duplicate remove clip
-*references* but never delete the WAVs they produced (`TransportController.swift:246-255, 274-309,
-340-380`); there is no GC. Disk grows unbounded across sessions.
+**H3 — Orphaned audio files accumulate. ✅ FIXED** Undo/`clearAll`/trim/split/duplicate removed
+clip *references* but never deleted the WAVs they produced, so disk grew unbounded across sessions.
 → **Do:** on replace/clear, delete files no longer referenced (respect Undo: keep a trash set, or
 sweep unreferenced files when the undo stack drops them).
+→ **Fixed by:** `collectOrphanedFiles()` sweeps session-created files that no remaining clip
+references, where the referenced set spans the current tracks plus every undo/redo snapshot — so a
+trim/split/clear stays undoable until its pre-op snapshot ages out of the 30-deep stack. Files an
+in-flight edit has written but not yet referenced are exempt (`registerPendingFile`), and imported
+originals are never registered at all, so the sweep can't delete the user's own audio.
 
-**H4 — Built-in presets clobber user presets on every launch.** `installBuiltInPresets`
-(`EffectsChainController.swift:168-194`) rewrites `Clean/Warm/Ambient/Lo-Fi` unconditionally at
-`AudioManager.init`. A user who saves over one of those names loses their edit silently.
+**H4 — Built-in presets clobber user presets on every launch. ✅ FIXED** `installBuiltInPresets`
+rewrote `Clean/Warm/Ambient/Lo-Fi` unconditionally at `AudioManager.init`, so a user who saved over
+one of those names lost their edit silently.
 → **Do:** write built-ins only if absent, or namespace them (`_builtin/…`).
+→ **Fixed by:** built-ins are seeded only when the preset file is absent.
 
 **H5 — Input format assumes ≤2 channels.** `EngineController.start` connects
-`inputNode → mainMixerNode` with the device's native `hwFmt` (`EngineController.swift:73-88`).
-A multi-channel interface (e.g. 8-in) then meets stereo downstream; the mismatch can throw on
-connect or need explicit downmix.
+`inputNode → mainMixerNode` with the device's native `hwFmt` (`EngineController.swift:101`, connect
+at `:115`). A multi-channel interface (e.g. 8-in) then meets stereo downstream; the mismatch can
+throw on connect or need explicit downmix.
 → **Do:** set the input connection format to a 2-channel mixdown explicitly (or verify with a
 multichannel device).
 
-**H6 — Path traversal on project load.** `ProjectController.performLoad` builds
-`packageURL.appendingPathComponent(cd.relativePath)` (`ProjectController.swift:184`) with no
-sanitisation; a hand-edited `project.json` with `../` reads arbitrary local files.
+**H6 — Path traversal on project load.** `ProjectController.performLoad`
+(`ProjectController.swift:165`) builds `packageURL.appendingPathComponent(cd.relativePath)` (`:207`)
+with no sanitisation; a hand-edited `project.json` with `../` reads arbitrary local files.
 → **Do:** reject `relativePath` containing `..` / absolute components.
 
 ## 8.3 Performance
 
-**P1 — 60 Hz invalidation of the whole view tree.** The display tick mutates three `@Published`
-properties every 1/60 s — `tracks[i].loopProgress` via `updatePlaybackProgress`
-(`TransportController.swift:61-75`), `trackLevels` and `waveformSamples` (`MeterController.swift:
-126-162`). Each write fires `objectWillChange` for the whole manager, re-rendering every lane, control
-and panel at 60 Hz while playing.
-→ **Do:** move frequently-updating readouts onto their own small `ObservableObject`s (or
-`TimelineView`/`Canvas`), so meter/playhead churn doesn't invalidate the whole tree.
+**P1 — 60 Hz invalidation of the whole view tree. ✅ FIXED (2026-10-12).** The display tick mutated
+per-frame state that the whole tree observed. It now writes only into `LiveState`'s three focused
+objects (`meters`, `trackMeters`, `playhead`), and each view observes the one it reads — see
+`updatePlaybackProgress` (`TransportController.swift:162`) and `tick` (`MeterController.swift:130`).
+`tracks[i].loopProgress` no longer exists; the per-track playhead is `LiveState.playhead.trackProgress`.
+**Fixed by:** the P1 stage of the 2026-10-12 refactor; §8.7.
 
 **P2 — `rebuildChain` rebuilds the entire engine on every chain edit.** Add/remove/reorder
-(`EffectsChainController.swift:87-109`) does a full `stopMonitoring()`/`startMonitoring()` — expensive,
-drops track playback, and feeds C2.
+(`addSlot` `EffectsChainController.swift:82`, `removeSlot` `:87`, `moveSlot` `:93`, all landing in
+`rebuildChain` `:100`) does a full `stopMonitoring()`/`startMonitoring()` — expensive, drops track
+playback, and feeds C2.
 → **Do:** insert/remove only the affected AU node(s) in place.
 
 ## 8.4 UX correctness
 
 **U1 — Count-in is not aligned to the metronome grid.** `RecordingController.start`
-(`RecordingController.swift:50-72`) uses a one-shot `Timer` for `secsPerBar * countInBars` and then
-records; the metronome schedules its own beat grid from `play()` with a different phase. If the
-metronome was already running, or the tempo changes, the count-in clicks won't line up with where
+(`RecordingController.swift:151`) uses a one-shot `Timer` for `secsPerBar * countInBars` (`:156-161`)
+and then records; the metronome schedules its own beat grid from `play()` with a different phase. If
+the metronome was already running, or the tempo changes, the count-in clicks won't line up with where
 recording starts. Timer drift adds more error.
 → **Do:** drive the count-in from the metronome's `beatCount` (record on the N-th future beat).
 
 **U2 — Split requires active playback and a mid-clip playhead.** `splitClipAtPlayhead`
-(`TransportController.swift:318-322`) reads `loopProgress`, which is only non-zero while the track
-plays, and the Settings "SPLIT" button is disabled unless `isPlaying` (`Views.swift:2186`). You
-cannot split a stopped clip at a chosen point.
+(`TransportController.swift:588`) reads the live per-track playhead, which is only non-zero while the
+track plays, and the Settings "SPLIT" button is disabled unless a take is resolvable
+(`Views.swift:2300`). You cannot split a stopped clip at a chosen point. H2 (2026-10-12) narrowed
+this: the split now targets the *selected* take, but still only while playing, and only when that
+take is the track's last one.
 → **Do:** introduce a stationary timeline playhead for edits.
 
 **U3 — MIDI track-follow reacts to every channel-voice message.** `DeviceController.setupMIDI`
-(`DeviceController.swift:82-92`) selects a track on *any* UMP channel-voice type `0x2`, including
+(`DeviceController.swift:98`) selects a track on *any* UMP channel-voice type `0x2`, including
 note-off and CC — so sustained controller traffic from the OP-XY will fight the user's track clicks.
 → **Do:** react only to note-on (or a dedicated channel/message).
 
-**U4 — Metronome phase jump on tempo change.** `refill` (`MetronomeController.swift:125-131`) does
-`player.stop(); player.play()` when BPM changes, resetting the beat phase to 0 (audible hiccup).
+**U4 — Metronome phase jump on tempo change.** `refill` (`MetronomeController.swift:121`) does
+`player.stop(); player.play()` (`:126`) when BPM changes, resetting the beat phase to 0 (audible
+hiccup).
 → **Do:** re-anchor `nextBeatFrame` to the current playhead without restarting the node.
 
 ## 8.5 Cleanup (CL-1, concrete)
 
 Confirmed unused / dead — safe to delete:
 
-- `EffectState` class — declared, never used (`EffectsCore.swift:84-105`).
-- `reverbPresets` + `reverbLabel` — only self-referential (`Models.swift:109-123`).
-- `Recording` + `AudioManager.recordings` — written (`RecordingController.swift:118-123`,
-  `TransportController.swift:253`) but **never read by any view**; delete the struct and the
-  published array together.
-- `TrackInfo.layerCount` (`Models.swift:46`), `Recording.durationString` (`Models.swift:22`).
-- `Theme.shadow` (`Theme.swift:16`).
-- `TopBar.blinkOpacity()` — returns a constant 1.0; no-op (`Views.swift:389-392`).
-- `WindowAccessor` — only used with an empty callback `{ _ in }` (`Views.swift:198, 1870-1876`).
-- `TrackFader.color` parameter — accepted, unused (`Views.swift:169-204`).
-- `ReelView.cx` / `cy` — passed, unused (`Views.swift:1395-1401`).
+- `EffectState` class — declared, never used (`EffectsCore.swift:87`).
+- `reverbPresets` + `reverbLabel` — only self-referential (`Models.swift:117`, `:129`).
+- `Recording` + `AudioManager.recordings` — written (`RecordingController.swift:257`,
+  cleared at `TransportController.swift:373`) but **never read by any view**; delete the struct and
+  the published array together.
+- `TrackInfo.layerCount` (`Models.swift:54`), `Recording.durationString` (`Models.swift:31`).
+- `Theme.shadow` (`Theme.swift:16`) — confirmed: no `Theme.shadow` reference anywhere.
+- `TopBar.blinkOpacity()` — returns a constant 1.0; no-op (`Views.swift:401`, called at `:324`).
+- `WindowAccessor` — only used with an empty callback `{ _ in }` (`App.swift:213`;
+  struct at `Views.swift:1993`).
+- `TrackFader.color` parameter — accepted, unused (`Views.swift:171`).
+- `ReelView.cx` / `cy` — passed, unused (`Views.swift:1514`).
 
-Other notes: `KeyboardShortcutMonitor` matches raw `keyCode`s (`App.swift:26-132`) → breaks on
+Other notes: `KeyboardShortcutMonitor` matches raw `keyCode`s (`App.swift:27-148`) → breaks on
 non-US layouts (prefer `characters`/`charactersIgnoringModifiers`). Master bus is silently attenuated
-`× 0.6` (`EngineController.swift:153, 250`), so the OUT knob never reaches unity — make this explicit
-or remove it. Mixdown loops short clips up to the longest track (`TransportController.swift:529`),
-which is surprising for an export — confirm it's intended.
+`× 0.6` (`EngineController.swift:181, 314`), so the OUT knob never reaches unity — make this explicit
+or remove it. Mixdown loops short clips up to the longest track (`bounceMixdown`,
+`TransportController.swift:898`), which is surprising for an export — confirm it's intended.
 
 ## 8.6 Verification checklist (needs the USB interface)
 
@@ -566,7 +594,15 @@ Run `open "Tape 08.app"` and walk this matrix; it is the part the refactor could
   audio file (reports count, still loads).
 - **Editing** — undo/redo across trim/split/duplicate/import/volume/mute/solo; verify files on disk
   after undo/clear (H3).
-- **Trim / Split / Duplicate (H2, U2)** — on a multi-take track, confirm which clip is edited.
+- **Edits in flight (C4)** — with a long take, start trim / split / duplicate / import / record-stop
+  and **undo and redo while the edit is still running**; the edit must be dropped, not applied on top
+  of the restored state. Two duplicates inside one second must land on distinct filenames (C4a).
+  Cancelling TRIM while APPLY is running must stay cancelled.
+- **Trim / Split / Duplicate / Export (H2, U2)** — on a multi-take track, click a take and confirm
+  TRIM, DUP and ⌘E act on **that** take; ⌘T must still refuse a non-last take with its status, and
+  must still be repeatable after a successful split. Move the selection while an edit is in flight and
+  confirm it is not yanked back when the edit lands. Then undo and confirm the highlight, the track
+  header, the transport's `/ TAKE n/m`, the FX header and the trim header all name the same take.
 - **Import / Export / Mixdown** — drag-drop import; export a track; bounce; listen for clicks (H1).
 - **Devices** — switch output while monitoring; unplug input; plug a >2-channel interface (H5).
 - **MIDI** — touch OP-XY controls and confirm track-follow only on intended messages (U3).
@@ -577,14 +613,18 @@ Run `open "Tape 08.app"` and walk this matrix; it is the part the refactor could
 | Priority | Task | Ref |
 |----------|------|-----|
 | ✅ done | ~~`C1` param thread-safety~~ · ~~`C2` async-insert epoch~~ · ~~`C3` render-thread file write~~ · ~~`C5` double-engine leak~~ | §8.9 |
+| ✅ done | ~~`P1` 60 Hz whole-tree invalidation~~ · ~~`C4` off-main edit I/O~~ · ~~`H1` fades~~ · ~~`H2` clip selection~~ · ~~`H3` orphan files~~ · ~~`H4` presets~~ | §8.1–§8.3 |
 | P0 | Fix `UI-1` tape layout when panels are open | §8.0 |
-| P0 | Fix `P1` 60 Hz whole-tree invalidation | §8.3 |
-| P1 | `C4` off-main edit I/O; `U1` count-in alignment | §8.1, §8.4 |
-| P1 | `H1` fades, `H2` clip selection, `H3` orphan files, `H4` presets | §8.2 |
+| P1 | `U1` count-in alignment; `U2` multi-clip playback & stationary edit playhead | §8.4 |
 | P1 | `U3` MIDI filter, `U4` metronome phase | §8.4 |
 | P2 | `H5` multichannel input, `H6` path traversal, `P2` in-place chain edits | §8.2, §8.3 |
 | P2 | `UI-5` hit areas; visual re-check `UI-2/3/6/7/8` | §8.0 |
 | P3 | `CL-1` dead-code sweep; keyboard layout | §8.5 |
+
+**Landed 2026-10-12** (compile/link verified across all four gates; the audible and concurrent
+behaviour still needs a hardware pass): `P1`, `C4`, `H1`–`H4`. See §8.1–§8.3 for what each fix
+does. `U2` is the one that grew out of `H2`: only a track's last clip is decoded and played, so
+trim and duplicate now work on any selected take but split is still confined to the last one.
 
 ## 8.8 Section 2 rebaseline
 
