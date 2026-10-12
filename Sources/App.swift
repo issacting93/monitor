@@ -210,7 +210,6 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DotGridBackground())
         .background(Theme.bg)
-        .background(WindowAccessor { _ in })
         .onAppear {
             audio.startMonitoring()
             keyMonitor.install(audio: audio)

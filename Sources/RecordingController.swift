@@ -264,10 +264,8 @@ final class RecordingController {
                 return
             }
             let clip = TrackClip(url: u, duration: dur, peaks: peaks)
-            let rec  = Recording(url: u, duration: dur, trackIndex: trk)
 
             m.transport.pushUndo()
-            m.recordings.append(rec)
             m.tracks[trk].clips.append(clip)
             // The take just captured is the one the user will want to trim or duplicate —
             // unless they picked a different one while it was being measured.

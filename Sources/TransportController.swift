@@ -483,7 +483,6 @@ final class TransportController {
             manager.tracks[i].clips.removeAll()
             trackBuffers[i] = nil
         }
-        manager.recordings.removeAll()
         // Every clip just went away, so a selection could only name one that no longer
         // exists. Undo will bring the clips back, but not the selection — a stale id
         // would silently resolve to some other take.

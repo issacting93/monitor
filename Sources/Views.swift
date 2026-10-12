@@ -170,7 +170,6 @@ struct ArcKnob: View {
 
 struct TrackFader: View {
     @Binding var value: Double
-    let color: Color
     var onDragStart: (() -> Void)? = nil
     var onDragEnd: (() -> Void)? = nil
     @State private var isDragging = false
@@ -321,7 +320,6 @@ struct TopBar: View {
                     Circle()
                         .fill(statusColor)
                         .frame(width: 6, height: 6)
-                        .opacity(audio.isRecording ? (blinkOpacity()) : 1)
                     Text(statusText)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .tracking(3)
@@ -396,11 +394,6 @@ struct TopBar: View {
         .padding(.horizontal, 28).padding(.vertical, 10)
         .background(Theme.bg)
         .overlay(Rectangle().fill(Theme.textPrimary.opacity(0.10)).frame(height: 1), alignment: .bottom)
-    }
-
-    private func blinkOpacity() -> Double {
-        // Simple blink approximation — the actual blink uses animation
-        1.0
     }
 
     @ViewBuilder
@@ -656,7 +649,7 @@ struct TrackControlsView: View {
                 value: Binding(
                     get: { track.volume },
                     set: { audio.setTrackVolume(index, $0) }
-                ), color: color,
+                ),
                 onDragStart: { audio.beginUndoGesture() },
                 onDragEnd: { audio.endUndoGesture() }
             )
@@ -1558,8 +1551,6 @@ struct TransportBar: View {
 // ── Reel SVG ────────────────────────────────────────────────────────────────
 
 struct ReelView: View {
-    let cx: CGFloat
-    let cy: CGFloat
     let spinning: Bool
     let fast: Bool
 
@@ -1683,9 +1674,9 @@ struct ArrangeHeadUnit: View {
                 ZStack {
                     // Reels
                     HStack(spacing: 0) {
-                        ReelView(cx: 0, cy: 0, spinning: audio.isPlaying || audio.isRecording, fast: audio.isRecording)
+                        ReelView(spinning: audio.isPlaying || audio.isRecording, fast: audio.isRecording)
                         Spacer()
-                        ReelView(cx: 0, cy: 0, spinning: audio.isPlaying || audio.isRecording, fast: audio.isRecording)
+                        ReelView(spinning: audio.isPlaying || audio.isRecording, fast: audio.isRecording)
                     }
                     .padding(.horizontal, 20)
 
@@ -2031,16 +2022,6 @@ struct MonitorView: View {
             }
             .frame(height: 6)
         }
-    }
-}
-
-// ── WindowAccessor ──────────────────────────────────────────────────────────
-
-struct WindowAccessor: NSViewRepresentable {
-    var callback: (NSWindow?) -> Void
-    func makeNSView(context: Context) -> NSView { NSView() }
-    func updateNSView(_ nsView: NSView, context: Context) {
-        DispatchQueue.main.async { callback(nsView.window) }
     }
 }
 

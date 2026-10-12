@@ -1,7 +1,7 @@
 // EffectsCore.swift — modular effect system core
 //
 // Module/parameter model, the AudioEffectKernel protocol, ChainSlot,
-// EffectState, the EffectAudioUnit AU host, EffectRegistry, and the
+// the EffectAudioUnit AU host, EffectRegistry, and the
 // Apple built-in + custom module definitions.
 //
 // Extracted from the AudioManager mono-file. Pure move, no behaviour change.
@@ -81,29 +81,6 @@ struct EffectModule {
         self.makeKernel = makeKernel
         self.makeAudioNode = makeAudioNode
         self.applyParameter = applyParameter
-    }
-}
-
-class EffectState: ObservableObject {
-    @Published var values: [String: Float]
-    let parameters: [EffectParameter]
-    var onParameterChange: ((String, Float) -> Void)?
-
-    init(parameters: [EffectParameter]) {
-        self.parameters = parameters
-        var vals: [String: Float] = [:]
-        for p in parameters { vals[p.id] = p.defaultValue }
-        self.values = vals
-    }
-
-    func binding(for id: String) -> Binding<Float> {
-        Binding(
-            get: { self.values[id] ?? 0 },
-            set: { newVal in
-                self.values[id] = newVal
-                self.onParameterChange?(id, newVal)
-            }
-        )
     }
 }
 

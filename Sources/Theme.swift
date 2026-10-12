@@ -13,7 +13,6 @@ enum Theme {
     static let surfaceInset  = Color(red: 0x08/255.0, green: 0x08/255.0, blue: 0x0A/255.0)
     static let line          = Color(red: 0xEC/255.0, green: 0xE8/255.0, blue: 0xDE/255.0).opacity(0.10)
     static let bezel         = Color(red: 0x2A/255.0, green: 0x28/255.0, blue: 0x24/255.0)
-    static let shadow        = Color(red: 0x2A/255.0, green: 0x28/255.0, blue: 0x24/255.0)
 
     static let accent        = Color(red: 0xE8/255.0, green: 0xB0/255.0, blue: 0x4A/255.0)
     static let accentDim     = Color(red: 0x8A/255.0, green: 0x76/255.0, blue: 0x38/255.0)

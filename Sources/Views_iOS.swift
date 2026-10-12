@@ -172,7 +172,7 @@ struct IOSTrackRow: View {
             TrackFader(value: Binding(
                 get: { track.volume },
                 set: { audio.setTrackVolume(index, $0) }
-            ), color: color, onDragStart: { audio.beginUndoGesture() }, onDragEnd: { audio.endUndoGesture() })
+            ), onDragStart: { audio.beginUndoGesture() }, onDragEnd: { audio.endUndoGesture() })
             .frame(width: 110, height: 26)
 
             Text("\(Int(track.volume * 100))")

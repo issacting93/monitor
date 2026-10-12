@@ -85,7 +85,6 @@ class AudioManager: ObservableObject {
     static let quantizeLabels = ["OFF", "BAR", "BEAT"]
 
     // Multitrack
-    @Published var recordings: [Recording] = []
     @Published var tracks: [TrackInfo] = (0..<Theme.trackCount).map { TrackInfo(id: $0) }
     @Published var selectedTrack: Int = 0
 

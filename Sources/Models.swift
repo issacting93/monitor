@@ -22,17 +22,6 @@ struct AudioDevice: Identifiable, Hashable {
     let name: String
 }
 
-struct Recording: Identifiable {
-    let id = UUID()
-    let url: URL
-    let duration: TimeInterval
-    let trackIndex: Int
-    var name: String { url.lastPathComponent }
-    var durationString: String {
-        String(format: "%d:%02d", Int(duration) / 60, Int(duration) % 60)
-    }
-}
-
 struct TrackClip: Identifiable {
     let id = UUID()
     let url: URL
@@ -51,7 +40,6 @@ struct TrackInfo: Identifiable {
     var muted = false
     var solo = false
     var isPlaying = false
-    var layerCount: Int { clips.count }
 }
 
 // ── Project Persistence (Codable) ──────────────────────────────────────────
@@ -112,20 +100,4 @@ struct ProjectData: Codable {
         self.effectChain = effectChain
         self.masterLimiterEnabled = masterLimiterEnabled
     }
-}
-
-let reverbPresets: [(label: String, preset: AVAudioUnitReverbPreset)] = [
-    ("Small Room",  .smallRoom),
-    ("Medium Room", .mediumRoom),
-    ("Large Room",  .largeRoom),
-    ("Medium Hall", .mediumHall),
-    ("Large Hall",  .largeHall),
-    ("Plate",       .plate),
-    ("Med Chamber", .mediumChamber),
-    ("Lg Chamber",  .largeChamber),
-    ("Cathedral",   .cathedral),
-]
-
-func reverbLabel(_ p: AVAudioUnitReverbPreset) -> String {
-    reverbPresets.first { $0.preset.rawValue == p.rawValue }?.label ?? "Unknown"
 }
