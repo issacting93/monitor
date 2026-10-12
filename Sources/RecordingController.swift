@@ -176,7 +176,7 @@ final class RecordingController {
         let m = manager
         guard let dryTap = dryMixer else { return }
         let fmt  = dryTap.outputFormat(forBus: 0)
-        let name = "take_\(timestampFmt.string(from: Date())).wav"
+        let name = "\(uniqueFileStem("take")).wav"
         let url  = m.transport.trackFolder(m.selectedTrack).appendingPathComponent(name)
         do {
             let file = try AVAudioFile(forWriting: url, settings: fmt.settings,

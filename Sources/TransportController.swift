@@ -35,6 +35,24 @@ final class TransportController {
     // shared across sessions and could lose a prior session's takes.
     private var sessionCreatedFiles: Set<String> = []
 
+    // Files an edit has written but that no clip references *yet*. The orphan sweep
+    // runs on every pushUndo, so without an exemption it could delete a file that is
+    // about to be referenced. An edit drops the exemption once its clip exists.
+    private var pendingFiles: Set<String> = []
+
+    // Bumped on every (re)decode of a track's buffer, so a decode that has been
+    // superseded can't publish over a newer one — the same idiom as `playGenerations`.
+    private var loadGenerations = [Int](repeating: 0, count: Theme.trackCount)
+
+    // Bumped by anything that replaces the clip set wholesale (undo, redo, restore,
+    // clear). Every edit captures it on entry and re-checks it before applying, so work
+    // dispatched before the change is dropped rather than landing on the new state.
+    // Re-resolving by clip id is not enough on its own: undo and redo restore the very
+    // same `TrackClip` values, UUIDs included, so an id can resolve again after a round
+    // trip. While the edits still run synchronously the check cannot fail — it is
+    // moving their file work off the main thread (C4b) that makes it load-bearing.
+    private var editEpoch = 0
+
     init(manager: AudioManager) {
         self.manager = manager
     }
@@ -44,6 +62,24 @@ final class TransportController {
 
     /// Track mixer nodes, in track order (used by the metering taps).
     var mixers: [AVAudioMixerNode] { trackMixers }
+
+    // MARK: - Background Work Invalidation
+
+    /// Invalidates every in-flight background operation. Called whenever the clip set
+    /// is replaced wholesale: a decode started before that would otherwise publish a
+    /// buffer for a clip that no longer exists.
+    private func invalidatePendingWork() {
+        editEpoch += 1
+        for i in 0..<loadGenerations.count { loadGenerations[i] += 1 }
+    }
+
+    /// Resolves a clip's current position on a track. Edits capture the clip's `id`
+    /// rather than its index before doing their work, because the array can be
+    /// reordered or replaced while that work runs.
+    private func indexOfClip(_ id: UUID, on trackIndex: Int) -> Int? {
+        guard trackIndex < manager.tracks.count else { return nil }
+        return manager.tracks[trackIndex].clips.firstIndex { $0.id == id }
+    }
 
     // MARK: - Graph handoff
 
@@ -61,6 +97,7 @@ final class TransportController {
 
     /// Drops every decoded buffer (e.g. after a project load replaces the clip set).
     func resetTrackBuffers() {
+        invalidatePendingWork()
         trackBuffers = Array(repeating: nil, count: Theme.trackCount)
     }
 
@@ -251,6 +288,7 @@ final class TransportController {
     }
 
     private func restoreTracks(_ snapshot: [TrackInfo]) {
+        invalidatePendingWork()
         for i in 0..<manager.tracks.count {
             if manager.tracks[i].isPlaying && i < playerNodes.count {
                 playerNodes[i].stop()
@@ -270,6 +308,7 @@ final class TransportController {
     func clearAll() {
         pushUndo()
         stopAll()
+        invalidatePendingWork()
         for i in 0..<manager.tracks.count {
             manager.tracks[i].clips.removeAll()
             trackBuffers[i] = nil
@@ -285,6 +324,27 @@ final class TransportController {
     /// are never registered, so they are never deleted.
     func registerSessionFile(_ url: URL) {
         sessionCreatedFiles.insert(url.standardizedFileURL.path)
+        pendingFiles.remove(url.standardizedFileURL.path)
+    }
+
+    /// Marks a file as written-but-not-yet-referenced, exempting it from the orphan
+    /// sweep until `registerSessionFile` promotes it (or `abandonPendingFile` drops
+    /// it). An edit that writes a file and only later installs the clip that
+    /// references it must call this in between — pushUndo() runs the sweep, and it
+    /// would otherwise delete the file the edit is about to attach.
+    func registerPendingFile(_ url: URL) {
+        pendingFiles.insert(url.standardizedFileURL.path)
+        sessionCreatedFiles.insert(url.standardizedFileURL.path)
+    }
+
+    /// Deletes a file an edit wrote but will never reference (its apply was
+    /// superseded) and forgets it, so it neither leaks on disk nor lingers in the
+    /// sweep's pending set.
+    func abandonPendingFile(_ url: URL) {
+        let path = url.standardizedFileURL.path
+        pendingFiles.remove(path)
+        sessionCreatedFiles.remove(path)
+        try? FileManager.default.removeItem(atPath: path)
     }
 
     /// Deletes session-created audio files that no remaining clip references. The
@@ -293,6 +353,8 @@ final class TransportController {
     /// union is unreachable and safe to remove. Runs when that union shrinks (undo-stack
     /// eviction, redo invalidation), which is why a trim/split/clear stays undoable: its
     /// pre-op snapshot still holds the file until it ages out of the 30-deep stack.
+    /// Files an in-flight edit has written but not yet referenced are exempt (see
+    /// `registerPendingFile`).
     func collectOrphanedFiles() {
         guard !sessionCreatedFiles.isEmpty else { return }
         var referenced = Set<String>()
@@ -306,7 +368,7 @@ final class TransportController {
         for snapshot in redoStack { add(snapshot) }
 
         let fm = FileManager.default
-        for path in sessionCreatedFiles.filter({ !referenced.contains($0) }) {
+        for path in sessionCreatedFiles.filter({ !referenced.contains($0) && !pendingFiles.contains($0) }) {
             try? fm.removeItem(atPath: path)
             sessionCreatedFiles.remove(path)
         }
@@ -332,6 +394,11 @@ final class TransportController {
     func applyTrim() {
         guard let ti = manager.trimmingTrack, ti < manager.tracks.count,
               let clip = manager.tracks[ti].clips.last else { return }
+        // Capture what the work needs by value, plus the two identities to re-check it
+        // against before applying: the clip's id (its index is not stable) and the edit
+        // epoch (the whole clip set can be replaced under us).
+        let epoch = editEpoch
+        let clipID = clip.id
         pushUndo()
         guard let srcFile = try? AVAudioFile(forReading: clip.url) else { return }
         let totalFrames = Int64(srcFile.length)
@@ -347,19 +414,30 @@ final class TransportController {
 
         // Write trimmed file
         let dir = clip.url.deletingLastPathComponent()
-        let trimName = "trim_\(timestampFmt.string(from: Date())).wav"
+        let trimName = "\(uniqueFileStem("trim")).wav"
         let trimURL = dir.appendingPathComponent(trimName)
         do {
             let outFile = try AVAudioFile(forWriting: trimURL, settings: srcFile.fileFormat.settings,
                                            commonFormat: .pcmFormatFloat32, interleaved: false)
             try outFile.write(from: readBuf)
-        } catch { manager.status = "Trim error: \(error.localizedDescription)"; return }
+        } catch {
+            try? FileManager.default.removeItem(at: trimURL)   // a failed write can leave a partial file
+            manager.status = "Trim error: \(error.localizedDescription)"
+            return
+        }
+        registerPendingFile(trimURL)   // written, nothing references it yet
+
+        guard epoch == editEpoch, let ci = indexOfClip(clipID, on: ti) else {
+            abandonPendingFile(trimURL)
+            manager.status = "Trim cancelled — the clip changed while it ran"
+            return
+        }
 
         // Replace clip
         let dur = Double(trimmedFrames) / srcFile.fileFormat.sampleRate
         let peaks = computePeaks(url: trimURL, count: Theme.clipPeaks)
-        manager.tracks[ti].clips[manager.tracks[ti].clips.count - 1] = TrackClip(url: trimURL, duration: dur, peaks: peaks)
-        registerSessionFile(trimURL)   // register only after the clip references it
+        manager.tracks[ti].clips[ci] = TrackClip(url: trimURL, duration: dur, peaks: peaks)
+        registerSessionFile(trimURL)   // now referenced, so it can be swept again
         trackBuffers[ti] = nil
         loadTrackBuffer(ti)
         manager.trimmingTrack = nil
@@ -380,8 +458,10 @@ final class TransportController {
             return
         }
 
+        let epoch = editEpoch
         let clipIndex = manager.tracks[trackIndex].clips.count - 1
         let clip = manager.tracks[trackIndex].clips[clipIndex]
+        let clipID = clip.id
         guard let srcFile = try? AVAudioFile(forReading: clip.url) else {
             manager.status = "Cannot read clip file"; return
         }
@@ -397,29 +477,43 @@ final class TransportController {
         if wasPlaying { stopTrackLoop(trackIndex) }
 
         let dir = clip.url.deletingLastPathComponent()
-        let ts = timestampFmt.string(from: Date())
 
         // Part A: frames 0..<splitFrame
         srcFile.framePosition = 0
         guard let bufA = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: framesA) else { return }
         do { try srcFile.read(into: bufA, frameCount: framesA) } catch { manager.status = "Split read error"; return }
-        let urlA = dir.appendingPathComponent("split_A_\(ts).wav")
+        let urlA = dir.appendingPathComponent("\(uniqueFileStem("split_A")).wav")
         do {
             let outA = try AVAudioFile(forWriting: urlA, settings: srcFile.fileFormat.settings,
                                        commonFormat: .pcmFormatFloat32, interleaved: false)
             try outA.write(from: bufA)
-        } catch { manager.status = "Split write error: \(error.localizedDescription)"; return }
+        } catch {
+            try? FileManager.default.removeItem(at: urlA)   // a failed write can leave a partial file
+            manager.status = "Split write error: \(error.localizedDescription)"
+            return
+        }
+        registerPendingFile(urlA)   // written, nothing references it yet
 
         // Part B: frames splitFrame..<totalFrames
         srcFile.framePosition = splitFrame
-        guard let bufB = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: framesB) else { return }
-        do { try srcFile.read(into: bufB, frameCount: framesB) } catch { manager.status = "Split read error"; return }
-        let urlB = dir.appendingPathComponent("split_B_\(ts).wav")
+        guard let bufB = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: framesB) else {
+            abandonPendingFile(urlA); return
+        }
+        do { try srcFile.read(into: bufB, frameCount: framesB) } catch {
+            manager.status = "Split read error"; abandonPendingFile(urlA); return
+        }
+        let urlB = dir.appendingPathComponent("\(uniqueFileStem("split_B")).wav")
         do {
             let outB = try AVAudioFile(forWriting: urlB, settings: srcFile.fileFormat.settings,
                                        commonFormat: .pcmFormatFloat32, interleaved: false)
             try outB.write(from: bufB)
-        } catch { manager.status = "Split write error: \(error.localizedDescription)"; return }
+        } catch {
+            try? FileManager.default.removeItem(at: urlB)
+            manager.status = "Split write error: \(error.localizedDescription)"
+            abandonPendingFile(urlA)
+            return
+        }
+        registerPendingFile(urlB)
 
         let sr = srcFile.fileFormat.sampleRate
         let clipA = TrackClip(url: urlA, duration: Double(framesA) / sr,
@@ -427,11 +521,17 @@ final class TransportController {
         let clipB = TrackClip(url: urlB, duration: Double(framesB) / sr,
                               peaks: computePeaks(url: urlB, count: Theme.clipPeaks))
 
+        guard epoch == editEpoch, let ci = indexOfClip(clipID, on: trackIndex) else {
+            abandonPendingFile(urlA); abandonPendingFile(urlB)
+            manager.status = "Split cancelled — the clip changed while it ran"
+            return
+        }
+
         pushUndo()
-        manager.tracks[trackIndex].clips.remove(at: clipIndex)
-        manager.tracks[trackIndex].clips.insert(clipA, at: clipIndex)
-        manager.tracks[trackIndex].clips.insert(clipB, at: clipIndex + 1)
-        registerSessionFile(urlA)   // register only after the clips reference them
+        manager.tracks[trackIndex].clips.remove(at: ci)
+        manager.tracks[trackIndex].clips.insert(clipA, at: ci)
+        manager.tracks[trackIndex].clips.insert(clipB, at: ci + 1)
+        registerSessionFile(urlA)   // now referenced, so they can be swept again
         registerSessionFile(urlB)
 
         trackBuffers[trackIndex] = nil
@@ -445,28 +545,35 @@ final class TransportController {
             manager.status = "No clip to duplicate on TRK \(String(format: "%02d", trackIndex + 1))"
             return
         }
+        let epoch = editEpoch
         let ci = clipIndex ?? (manager.tracks[trackIndex].clips.count - 1)
         guard ci >= 0 && ci < manager.tracks[trackIndex].clips.count else { return }
         let clip = manager.tracks[trackIndex].clips[ci]
+        let clipID = clip.id
 
         let fm = FileManager.default
         let dir = clip.url.deletingLastPathComponent()
         let base = clip.url.deletingPathExtension().lastPathComponent
         let ext = clip.url.pathExtension
-        let ts = timestampFmt.string(from: Date())
-        let dupURL = dir.appendingPathComponent("\(base)_dup_\(ts).\(ext)")
+        let dupURL = dir.appendingPathComponent("\(uniqueFileStem("\(base)_dup")).\(ext)")
         do {
             try fm.copyItem(at: clip.url, to: dupURL)
         } catch {
             manager.status = "Duplicate error: \(error.localizedDescription)"; return
         }
+        registerPendingFile(dupURL)   // written, nothing references it yet
 
         let peaks = computePeaks(url: dupURL, count: Theme.clipPeaks)
         let newClip = TrackClip(url: dupURL, duration: clip.duration, peaks: peaks,
                                 fadeIn: clip.fadeIn, fadeOut: clip.fadeOut)
+        guard epoch == editEpoch, let at = indexOfClip(clipID, on: trackIndex) else {
+            abandonPendingFile(dupURL)
+            manager.status = "Duplicate cancelled — the clip changed while it ran"
+            return
+        }
         pushUndo()
-        manager.tracks[trackIndex].clips.insert(newClip, at: ci + 1)
-        registerSessionFile(dupURL)   // register only after the clip references it
+        manager.tracks[trackIndex].clips.insert(newClip, at: at + 1)
+        registerSessionFile(dupURL)   // now referenced, so it can be swept again
         trackBuffers[trackIndex] = nil
         loadTrackBuffer(trackIndex)
         manager.projectDirty = true
@@ -690,23 +797,28 @@ final class TransportController {
         let url = lastClip.url
         let fadeIn = lastClip.fadeIn
         let fadeOut = lastClip.fadeOut
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var loaded: AVAudioPCMBuffer?
-            if let file = try? AVAudioFile(forReading: url) {
-                let frames = AVAudioFrameCount(file.length)
-                if let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) {
-                    try? file.read(into: buffer)
-                    // Bake the clip's anti-click fades in once, so playback and loop
-                    // re-scheduling reuse a faded buffer (and the loop seam is clean).
-                    applyClipFades(buffer, fadeIn: fadeIn, fadeOut: fadeOut)
-                    loaded = buffer
-                }
-            }
-            DispatchQueue.main.async {
-                guard let self else { return }
-                if let loaded, i < self.trackBuffers.count { self.trackBuffers[i] = loaded }
-                completion?(loaded != nil)
-            }
+        // Claim a generation before the decode starts, so a load that is superseded
+        // while it runs can tell that its result is stale.
+        loadGenerations[i] += 1
+        let gen = loadGenerations[i]
+        performOffMain { () -> AVAudioPCMBuffer? in
+            guard let file = try? AVAudioFile(forReading: url) else { return nil }
+            let frames = AVAudioFrameCount(file.length)
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames)
+            else { return nil }
+            try? file.read(into: buffer)
+            // Bake the clip's anti-click fades in once, so playback and loop
+            // re-scheduling reuse a faded buffer (and the loop seam is clean).
+            applyClipFades(buffer, fadeIn: fadeIn, fadeOut: fadeOut)
+            return buffer
+        } apply: { [weak self] loaded in
+            guard let self else { return }
+            // Another load — a later edit, or a restore that replaced the clip set —
+            // has superseded this one. Publishing now would install a buffer for a
+            // clip that is no longer the track's last.
+            guard gen == self.loadGenerations[i] else { completion?(false); return }
+            if let loaded, i < self.trackBuffers.count { self.trackBuffers[i] = loaded }
+            completion?(loaded != nil)
         }
     }
 

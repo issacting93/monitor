@@ -24,6 +24,36 @@ let timestampFmt: DateFormatter = {
     let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"; return f
 }()
 
+// Monotonic per-process counter behind `uniqueFileStem`. Locked because recordings
+// are named on the main thread while an edit's file work may not be.
+private let uniqueStemLock = UnfairLock()
+private var uniqueStemCounter: UInt64 = 0
+
+// A filename stem that stays unique when two calls land in the same second. The
+// timestamp alone is second-resolution, so duplicating a clip twice in quick
+// succession — or a split landing in the same second as a trim — produced an
+// identical destination path and the second write collided with the first. The
+// timestamp still leads, so files sort chronologically in Finder.
+func uniqueFileStem(_ prefix: String, at date: Date = Date()) -> String {
+    let n = uniqueStemLock.withLock { () -> UInt64 in
+        uniqueStemCounter += 1
+        return uniqueStemCounter
+    }
+    return "\(prefix)_\(timestampFmt.string(from: date))_\(String(n, radix: 36))"
+}
+
+// Runs `work` on the background I/O queue and `apply` back on the main thread.
+// Everything `work` reads must be captured by value *before* the call: the
+// main-thread state it came from can change while it runs, and the result is only
+// valid against the state it was captured from. Callers that can be superseded
+// re-check a generation counter or an edit epoch inside `apply`.
+func performOffMain<T>(work: @escaping () -> T, apply: @escaping (T) -> Void) {
+    DispatchQueue.global(qos: .userInitiated).async {
+        let result = work()
+        DispatchQueue.main.async { apply(result) }
+    }
+}
+
 // Pure: applies an anti-click fade-in/out (seconds) to a decoded float buffer in
 // place. Each ramp is capped at half the clip so a short clip can't ramp up and
 // straight back down. No-op when the fade is non-positive or the buffer is empty.
