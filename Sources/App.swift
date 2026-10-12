@@ -146,6 +146,7 @@ final class KeyboardShortcutMonitor {
 struct ContentView: View {
     @StateObject private var audio = AudioManager()
     private let keyMonitor = KeyboardShortcutMonitor()
+    @State private var showSaveLocationSheet = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -201,6 +202,11 @@ struct ContentView: View {
         .onAppear {
             audio.startMonitoring()
             keyMonitor.install(audio: audio)
+            // Sandboxed first run: ask where takes should go.
+            if SaveLocation.needsSelection { showSaveLocationSheet = true }
+        }
+        .sheet(isPresented: $showSaveLocationSheet) {
+            SaveLocationSheet(audio: audio)
         }
         .onDisappear {
             keyMonitor.remove()

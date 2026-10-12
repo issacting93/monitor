@@ -34,6 +34,24 @@ open "Tape 08.app"
 Prefer Xcode? Open `Tape08/Tape08.xcodeproj` and build the **Tape08** scheme. The project uses a
 synchronized folder group pointing at `../Sources`, so both builds compile the same files.
 
+### Mac App Store build
+
+The Xcode target is **sandboxed** (required by the Mac App Store) and ships a generated app icon;
+the `package.sh` build above is the everyday, unsandboxed dev build. To archive for submission:
+
+```bash
+# Renders the AppIcon PNGs (re-run after changing the design)
+./Tools/make_icon.sh
+
+# Archive + export an App Store Connect package (needs an Apple Developer Team ID)
+./Tools/package-appstore.sh <TEAM_ID>
+```
+
+`Tools/package-appstore.sh` runs `xcodebuild … archive` and `-exportArchive` with
+`ExportOptions.plist`. Because the app is sandboxed it cannot write a hardcoded `~/Desktop` path, so
+takes now go to a **folder you pick on first run** (remembered as a security-scoped bookmark) — see
+[Files it writes](#files-it-writes).
+
 ## Build & run — iPad
 
 Open `Tape08iPad/Tape08iPad.xcodeproj` in Xcode, set your signing team, and run the **Tape08iPad**
@@ -124,10 +142,17 @@ Deferred features currently show a status message on iPad rather than a file pan
 **macOS**
 
 ```
-~/Desktop/OP-XY Monitor/Tracks/Track NN/        recorded takes (default; change in Settings)
+<chosen folder>/Tracks/Track NN/                recorded takes — you pick the folder on first run
+                                                (change later in Settings); the choice is remembered
+                                                across launches as a security-scoped bookmark
 ~/Library/Application Support/Tape08/Presets/   effect-chain presets (JSON)
 <project>.xyproj/                               project package (project.json + Audio/)
 ```
+
+On first launch of the sandboxed build a sheet asks where takes should go; **NOT NOW** keeps the
+always-writable fallback inside the app container
+(`~/Library/Containers/com.tape08.app/Data/Documents/OP-XY Monitor/Tracks`). The unsandboxed
+`package.sh` build skips the prompt and defaults to `~/Desktop/OP-XY Monitor`.
 
 **iPad** (inside the app's container; visible in the Files app via `UIFileSharingEnabled`)
 
@@ -141,10 +166,12 @@ Library/Application Support/Tape08/Presets/     effect-chain presets (JSON)
 ## Repository layout
 
 ```
-Sources/                     all Swift source (23 files) — shared core + both UIs
-package.sh                   builds and signs the macOS "Tape 08.app"
-Tape08/                      macOS Xcode project (Tape08.xcodeproj)
+Sources/                     all Swift source (25 files) — shared core + both UIs
+package.sh                   builds and signs the macOS "Tape 08.app" (ad-hoc dev build)
+Tape08/                      macOS Xcode project (Tape08.xcodeproj, sandboxed + AppIcon assets)
 Tape08iPad/                  iPad Xcode project (Tape08iPad.xcodeproj) + Info.plist
+Tools/                       make_icon.sh (render AppIcon), package-appstore.sh (archive + export)
+ExportOptions.plist          xcodebuild -exportArchive options for App Store Connect
 UI Ideas/                    design references / screenshots
 archive/                     earlier prototypes (not built)
 deep-claude/                 vendored tooling (not part of the app)
@@ -169,6 +196,9 @@ OP-XY Monitor multitrack product plan.md   product plan
   strain the render thread.
 - **Exported `.xyproj` opens with "missing files"** — the project moved away from its `Audio/`
   folder; keep the package folder intact.
+- **"Where did my takes go?" / "Recording error"** — the sandboxed build writes to the folder you
+  picked on first run (or the container fallback if you chose *Not now*). Check the path in
+  **Settings**, or pick a new folder there; the choice persists as a security-scoped bookmark.
 
 ## License / attribution
 

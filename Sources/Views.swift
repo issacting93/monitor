@@ -2289,4 +2289,74 @@ struct SettingsPanel: View {
         }
     }
 }
+
+// ── First-run save location ─────────────────────────────────────────────────
+
+/// Shown once on first launch of the sandboxed build, so the user can pick where
+/// takes are saved. Choosing a folder stores a security-scoped bookmark (see
+/// `SaveLocation`) so the choice survives relaunch; "Not now" keeps the app's own
+/// Documents folder as a always-writable fallback.
+struct SaveLocationSheet: View {
+    @ObservedObject var audio: AudioManager
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("WHERE SHOULD TAPES BE SAVED?")
+                .font(.system(size: 11, weight: .black, design: .monospaced))
+                .tracking(2)
+                .foregroundColor(Theme.textSecondary)
+
+            Text("TAPE 08 records your takes into a folder you choose. Pick one now, or keep the default and change it later in Settings.")
+                .font(.system(size: 11, design: .monospaced))
+                .foregroundColor(Theme.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(displayPath)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(2)
+                .truncationMode(.middle)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(8)
+                .background(Theme.surfaceInset)
+
+            HStack(spacing: 10) {
+                Button {
+                    SaveLocation.markPrompted()
+                    dismiss()
+                } label: { sheetButton("NOT NOW", accent: false) }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                Button {
+                    audio.changeSaveLocation()
+                    dismiss()
+                } label: { sheetButton("CHOOSE FOLDER\u{2026}", accent: true) }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(22)
+        .frame(width: 440)
+        .background(Theme.bg)
+    }
+
+    private var displayPath: String {
+        audio.saveLocation.path.replacingOccurrences(
+            of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
+    }
+
+    private func sheetButton(_ title: String, accent: Bool) -> some View {
+        let tint = accent ? Theme.accent : Theme.textSecondary
+        return Text(title)
+            .font(.system(size: 9, weight: .black, design: .monospaced))
+            .tracking(1)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .foregroundColor(tint)
+            .background(Theme.surfaceInset)
+            .overlay(Rectangle().stroke(tint.opacity(0.3), lineWidth: 1))
+            .contentShape(Rectangle())
+    }
+}
 #endif

@@ -183,8 +183,13 @@ inputNode ──▶ mainMixer (inputVolume) ──▶ dryTap ──▶ [Apple ch
   pre-gain 0, 12 ms attack, 50 ms decay) sits before the output.
 - Per-track `playerN → trackMixN → master` provide per-track volume/pan/metering/playback.
 - The metronome has its own `metPlayer → metMix → master`.
-- **Input device**: on macOS the engine's input AUHAL is pinned to the selected device
-  (`AudioDeviceProviding.applyInputDevice`). On iPad the `AVAudioSession` is configured + activated
+- **Device routing** (`AudioDeviceProviding.applyEngineDevices(input:output:to:)`): the engine has a
+  single shared AUHAL, so it takes **one** device. On macOS, when the selected input and output
+  differ, the provider builds a **private aggregate device** (input + output, input as clock master)
+  and pins the AUHAL to that — pinning it straight at a mic-only input would leave no usable output
+  (silence). A routing failure is returned as a reason string and shown in the top bar.
+  `releaseEngineDevice()` tears the aggregate down on `stop()`, *after* `engine.stop()`, so it is
+  never destroyed under a running unit. On iPad the `AVAudioSession` is configured + activated
   **first** (`prepareForEngineStart()`, at the top of `start()`), then the session's preferred input
   is set — the session must be active before `inputNode.inputFormat` is read, or the format is
   0 Hz / 0 channels.
@@ -238,11 +243,14 @@ Everything else that crosses threads — kernel parameters, the pending-instanti
 
 ### 2.6 Persistence & files on disk
 
-Roots come from `PlatformPaths` (`tracksRoot`, `presetsDir`):
+Roots come from `PlatformPaths` (`tracksRoot`, `presetsDir`). On macOS the live takes root is
+`AudioManager.saveLocation`, which starts at `PlatformPaths.initialSaveLocation =
+SaveLocation.restore() ?? tracksRoot`, and is re-pointed whenever the user picks a folder:
 
 ```
-tracksRoot                      macOS: ~/Desktop/OP-XY Monitor/Tracks
- └─ Track NN/                   iOS:  <container>/Documents/OP-XY Monitor/Tracks
+saveLocation / tracksRoot       macOS: <user-chosen folder>/Tracks
+ └─ Track NN/                          (fallback: <container>/Documents/OP-XY Monitor/Tracks)
+                                iOS:  <container>/Documents/OP-XY Monitor/Tracks
       take_YYYY-MM-DD_HH-mm-ss.wav, trim_…, split_A/B_…, <imported>
 
 presetsDir                      macOS: ~/Library/Application Support/Tape08/Presets
@@ -253,6 +261,15 @@ presetsDir                      macOS: ~/Library/Application Support/Tape08/Pres
  ├─ project.json                ProjectData (Codable)
  └─ Audio/Track NN/<clip>.wav   copies of referenced clips
 ```
+
+**Sandbox & the save folder.** The macOS Xcode build is sandboxed (Mac App Store requirement), so
+it cannot write a hardcoded `~/Desktop` path. `SaveLocation` (`SaveLocation.swift`, macOS-only)
+handles this: a first-run sheet asks the user to choose a folder, the choice is persisted as a
+**security-scoped bookmark** in `UserDefaults` (`saveLocationBookmark`) and re-resolved +
+`startAccessingSecurityScopedResource()`-ed on every launch. The prompt is gated on
+`SaveLocation.isSandboxed` (env `APP_SANDBOX_CONTAINER_ID`), so the unsandboxed `package.sh` build
+skips it. Declining leaves the container `Documents` fallback. Project save/load and export use
+`NSSavePanel`/`NSOpenPanel` (Powerbox grants access), so they need no bookmark.
 
 `ProjectData` (`Models.swift`) is the versioned manifest (v1). Clip paths are stored **relative** to
 the package so a project is portable. On iPad the container is exposed to the Files app
@@ -271,8 +288,9 @@ the package so a project is portable. On iPad the container is exposed to the Fi
 Everything platform-specific sits behind `#if os(...)` so the same `Sources/` compiles for both:
 
 - **`AudioDeviceProviding`** (`AudioDeviceProviding.swift`) — the device-I/O interface:
-  `prepareForEngineStart()`, `loadDevices()`, `applyInputDevice(_:to:)`, `currentOutputName`,
-  `outputSelectionSupported`, and `startObserving(_:)` (emits `DeviceChange`). Two implementations:
+  `prepareForEngineStart()`, `loadDevices()`, `applyEngineDevices(input:output:to:)`,
+  `releaseEngineDevice()`, `currentOutputName`, `outputSelectionSupported`, and `startObserving(_:)`
+  (emits `DeviceChange`). Two implementations:
   **`CoreAudioDeviceProvider`** (`DeviceIO_macOS.swift`, wrapping the `CoreAudioDevices` HAL helpers)
   and **`AVAudioSessionDeviceProvider`** (`DeviceIO_iOS.swift`, wrapping `AVAudioSession` plus
   route-change / interruption / media-services notifications). `DeviceController` holds the correct
@@ -280,7 +298,11 @@ Everything platform-specific sits behind `#if os(...)` so the same `Sources/` co
 - **`DeviceID`** (`Models.swift`) — `AudioDeviceID` on macOS, a synthetic `UInt32` (index into
   `availableInputs`) on iPad, so the rest of the code stays agnostic.
 - **`PlatformPaths`** (`PlatformPaths.swift`) — `tracksRoot` / `presetsDir` (Desktop vs Documents /
-  Application Support).
+  Application Support), plus `initialSaveLocation` (= `SaveLocation.restore() ?? tracksRoot` on
+  macOS, else `tracksRoot`).
+- **`SaveLocation`** (`SaveLocation.swift`, `[mac]`) — the sandboxed save-folder: `isSandboxed`,
+  `needsSelection` (drives the first-run sheet), `restore()` / `remember(_:)` (security-scoped
+  bookmark round-trip), and `fallback` (container `Documents`). See §2.6.
 - **Entry + UI**: `App.swift` and `Views.swift` are `#if os(macOS)`; `App_iOS.swift` and
   `Views_iOS.swift` are `#if os(iOS)`. The shared view *primitives* (`ArcKnob`, `TrackFader`,
   `TempoControl`, `VerticalMeter`, `DotGridBackground`, `RetroButtonStyle`) stay unguarded in
@@ -300,11 +322,21 @@ platform sees.
    `arm64-apple-macosx14.0`, then assembles `Tape 08.app` (Info.plist, generated `.icns` icon, and
    an `audio-input` entitlement) and ad-hoc codesigns it. This is the everyday macOS build.
 2. **`Tape08/Tape08.xcodeproj`** — the macOS Xcode project (`PBXFileSystemSynchronizedRootGroup`
-   pointed at `../Sources`); scheme `Tape08`.
+   pointed at `../Sources`); scheme `Tape08`, bundle id `com.tape08.app`. This is the **sandboxed**
+   build: `Tape08/Tape08.entitlements` enables `app-sandbox`, `device.audio-input`,
+   `files.user-selected.read-write`, `files.bookmarks.app-scope`; the AppIcon comes from
+   `Assets.xcassets` (rendered by `Tools/make_icon.sh`).
 3. **`Tape08iPad/Tape08iPad.xcodeproj`** — the iPad Xcode project (its own synchronized group at
    `../Sources`); scheme `Tape08iPad`, `TARGETED_DEVICE_FAMILY=2`, iOS 17.0, bundle id
    `com.tape08.app.ipad`, with `Tape08iPad/Info.plist` (mic usage, `UIBackgroundModes=[audio]`,
    Files sharing).
+
+**Mac App Store pipeline.** `Tools/package-appstore.sh <TEAM_ID>` runs `xcodebuild … archive`
+(`-destination generic/platform=macOS`) then `-exportArchive` with `ExportOptions.plist`
+(`method = app-store-connect`, automatic signing); it needs a real Team ID / enrolled developer
+account, so it is separate from the ad-hoc `package.sh`. Note `Tools/make_icon.sh` must render into
+an exact-pixel `NSBitmapImageRep` (not `NSImage.lockFocus()`, which on a Retina Mac produces
+2×-sized PNGs that actool then silently drops, leaving the app with no `Assets.car`).
 
 Checks used throughout: `swiftc -typecheck -parse-as-library Sources/*.swift` for both
 `arm64-apple-macosx14.0` and `arm64-apple-ios17.0-simulator`, plus `xcodebuild … -scheme Tape08
@@ -314,7 +346,7 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 
 ## 4. File map
 
-23 files. `[shared]` compiles on both platforms; `[mac]`/`[iOS]` are guarded.
+25 files. `[shared]` compiles on both platforms; `[mac]`/`[iOS]` are guarded.
 
 | File | Lines | Platform | Responsibility |
 |------|------:|----------|----------------|
@@ -325,6 +357,7 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 | `EffectsCore.swift` | 503 | shared | Module/registry/chain/AU-host core + Apple module defs |
 | `EngineController.swift` | 318 | shared | `AVAudioEngine` graph spine + async kernel insert |
 | `AudioManager.swift` | 269 | shared | The `ObservableObject` facade: published state + forwarders |
+| `LiveState.swift` | 21 | shared | 60 Hz display state (meters / waveform / track progress) kept out of `@Published` |
 | `ProjectController.swift` | 265 | shared (`[mac]` panels) | `.xyproj` save/load |
 | `RecordingController.swift` | 246 | shared | Count-in + dry capture |
 | `App.swift` | 229 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
@@ -339,7 +372,8 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 | `Support.swift` | 48 | shared | `UnfairLock`, `computePeaks`, timestamp formatter |
 | `DeviceIO_macOS.swift` | 45 | `[mac]` | `CoreAudioDeviceProvider` |
 | `AudioDeviceProviding.swift` | 39 | shared | The device-I/O protocol + `DeviceChange` |
-| `PlatformPaths.swift` | 35 | shared | `tracksRoot` / `presetsDir` per platform |
+| `PlatformPaths.swift` | 35 | shared | `tracksRoot` / `presetsDir` / `initialSaveLocation` per platform |
+| `SaveLocation.swift` | 76 | `[mac]` | Sandboxed save-folder: security-scoped bookmark round-trip, first-run prompt state |
 | `App_iOS.swift` | 16 | `[iOS]` | iPad `@main` entry |
 
 ---

@@ -197,7 +197,10 @@ final class RecordingController {
                 DispatchQueue.main.async { self.manager.recordingDuration = Date().timeIntervalSince(s) }
             }
         } catch {
-            m.status = "Recording error: \(error.localizedDescription)"
+            // Include the destination so a write failure (e.g. missing permission on
+            // the save location) is actionable rather than just "couldn't be saved".
+            let dir = url.deletingLastPathComponent().path
+            m.status = "Recording error: \(error.localizedDescription) — check write access to \(dir)"
         }
     }
 

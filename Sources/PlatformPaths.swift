@@ -18,6 +18,17 @@ enum PlatformPaths {
         return base.appendingPathComponent("OP-XY Monitor/Tracks")
     }()
 
+    /// Save location to use at launch. On macOS this is the folder the user chose
+    /// (restored from a security-scoped bookmark) when running sandboxed; otherwise
+    /// it falls back to `tracksRoot`.
+    static var initialSaveLocation: URL {
+        #if os(macOS)
+        return SaveLocation.restore() ?? tracksRoot
+        #else
+        return tracksRoot
+        #endif
+    }
+
     /// Directory for effect-chain presets. App-private.
     /// macOS: ~/Library/Application Support/Tape08/Presets — iOS: Application Support/Tape08/Presets
     static let presetsDir: URL = {

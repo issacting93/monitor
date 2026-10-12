@@ -39,7 +39,7 @@ class AudioManager: ObservableObject {
     @Published var presetSaveName: String = ""
 
     // Settings
-    @Published var saveLocation: URL = PlatformPaths.tracksRoot
+    @Published var saveLocation: URL = PlatformPaths.initialSaveLocation
 
     // Trim editor
     @Published var trimmingTrack: Int? = nil

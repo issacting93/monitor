@@ -484,14 +484,26 @@ final class TransportController {
 
     func changeSaveLocation() {
         #if os(macOS)
+        let fm = FileManager.default
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
-        panel.title = "Choose Save Location"
+        panel.canCreateDirectories = true
+        panel.title = "Choose where TAPE 08 saves takes"
+        panel.prompt = "Choose"
+        // Start at the current folder when it exists; otherwise suggest the standard
+        // Desktop location so a first-run user lands somewhere sensible.
+        let current = manager.saveLocation
+        let suggested = fm.homeDirectoryForCurrentUser.appendingPathComponent("Desktop/OP-XY Monitor")
+        if fm.fileExists(atPath: current.path) { panel.directoryURL = current }
+        else if fm.fileExists(atPath: suggested.path) { panel.directoryURL = suggested }
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             DispatchQueue.main.async {
+                // Remembering the choice (a security-scoped bookmark when sandboxed)
+                // is what lets the folder survive relaunch.
+                SaveLocation.remember(url)
                 self?.manager.saveLocation = url
                 self?.manager.status = "Save location → \(url.path)"
             }
