@@ -2343,6 +2343,12 @@ struct SettingsPanel: View {
                         .foregroundColor(Theme.textEngraved)
 
                     HStack(spacing: 6) {
+                        // SPLIT reads the playhead, so it needs one: either a running
+                        // track, or a position parked on a stopped one by dragging the
+                        // bar ruler. Without the second case the button would refuse a
+                        // cut that ⌘T performs, since ⌘T has no such check.
+                        let splitReady = audio.hasEditableClip
+                            && (audio.tracks[audio.selectedTrack].isPlaying || audio.seekFraction != nil)
                         Button { audio.splitClipAtPlayhead(audio.selectedTrack) } label: {
                             HStack(spacing: 4) {
                                 Image(systemName: "scissors")
@@ -2353,15 +2359,13 @@ struct SettingsPanel: View {
                             }
                             .frame(maxWidth: .infinity)
                             .padding(.vertical, 7)
-                            .foregroundColor(audio.tracks[audio.selectedTrack].isPlaying && !audio.tracks[audio.selectedTrack].clips.isEmpty ? Theme.accent : Theme.textTertiary)
+                            .foregroundColor(splitReady ? Theme.accent : Theme.textTertiary)
                             .background(Theme.surfaceInset)
                             .overlay(Rectangle().stroke(Theme.accent.opacity(0.3), lineWidth: 1))
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(!audio.tracks[audio.selectedTrack].isPlaying
-                                  || !audio.hasEditableClip
-                                  || audio.busyEdit != nil)
+                        .disabled(!splitReady || audio.busyEdit != nil)
 
                         Button { audio.duplicateClip(audio.selectedTrack) } label: {
                             HStack(spacing: 4) {

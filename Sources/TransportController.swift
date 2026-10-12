@@ -832,6 +832,13 @@ final class TransportController {
 
             self.trackBuffers[trackIndex] = nil
             self.loadTrackBuffer(trackIndex)
+            // A parked position describes the clip that was just cut, and half of it is
+            // now a take of a different length — so the position goes with the clip
+            // rather than quietly coming to mean a fraction of the new pair.
+            if m.seekFraction != nil {
+                m.seekFraction = nil
+                m.live.playhead.trackProgress[trackIndex] = 0
+            }
             m.projectDirty = true
             m.status = "Split TRK \(String(format: "%02d", trackIndex + 1)) at \(Int(progress * 100))%"
         }
