@@ -41,6 +41,14 @@ enum Theme {
     static let effectsDrawerWidth:  CGFloat = 400
     static let settingsDrawerWidth: CGFloat = 260
 
+    /// The fixed right-hand column of a track row (play / mute / solo, fader, pan, meter).
+    /// The column's own frame and the width `LoopGridView` reserves for it have to be the
+    /// same number or the lanes and the controls drift apart, so it lives here rather than
+    /// in either of them. 460 rather than the 410 the 28 pt buttons needed: the three
+    /// controls are drawn at 28 pt inside a 44 pt target (see `RetroButtonStyle.hit`), and
+    /// the extra 16 pt each costs is real width the fader and pan slider must not lose.
+    static let controlsColumnWidth: CGFloat = 460
+
     static let trackColors: [Color] = [
         Color(red: 0xFF/255.0, green: 0x5A/255.0, blue: 0x6A/255.0),
         Color(red: 0x6F/255.0, green: 0x8C/255.0, blue: 0xFF/255.0),

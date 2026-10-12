@@ -33,13 +33,30 @@ struct RetroButtonStyle: ButtonStyle {
     var active: Bool = false
     var filled: Bool = false
 
+    /// Minimum target size. Draws nothing: the label keeps its own (smaller) frame, so
+    /// the border, fill and press animation are all unchanged, and the box only adds
+    /// transparent hit area around it. Set it where the visual is deliberately small but
+    /// a pointer still has to find it — a 28 pt square is a fine thing to look at and a
+    /// poor thing to aim at.
+    var hit: CGFloat? = nil
+
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label
+        let face = configuration.label
             .background(filled && active ? tint : Color.clear)
             .contentShape(Rectangle())
             .overlay(Rectangle().stroke(active ? tint : Theme.textPrimary.opacity(0.16), lineWidth: 1))
             .scaleEffect(configuration.isPressed ? 0.97 : 1.0)
             .animation(.easeOut(duration: 0.06), value: configuration.isPressed)
+
+        return Group {
+            if let hit {
+                // The press animation is already inside `face`, so it moves the 28 pt
+                // square and not the target around it.
+                face.frame(width: hit, height: hit).contentShape(Rectangle())
+            } else {
+                face
+            }
+        }
     }
 }
 
@@ -628,7 +645,7 @@ struct TrackControlsView: View {
                     .frame(width: 28, height: 28)
                     .foregroundColor(track.isPlaying ? Theme.accent : Theme.textSecondary)
             }
-            .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: track.isPlaying))
+            .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: track.isPlaying, hit: 44))
 
             Button { audio.toggleMute(index) } label: {
                 Text("M")
@@ -636,7 +653,7 @@ struct TrackControlsView: View {
                     .frame(width: 28, height: 28)
                     .foregroundColor(track.muted ? Theme.bg : Theme.textSecondary)
             }
-            .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: track.muted, filled: track.muted))
+            .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: track.muted, filled: track.muted, hit: 44))
 
             Button { audio.toggleSolo(index) } label: {
                 Text("S")
@@ -644,7 +661,7 @@ struct TrackControlsView: View {
                     .frame(width: 28, height: 28)
                     .foregroundColor(track.solo ? Theme.bg : Theme.textSecondary)
             }
-            .buttonStyle(RetroButtonStyle(tint: Color(red: 0x5C/255.0, green: 0xC8/255.0, blue: 0xE0/255.0), active: track.solo, filled: track.solo))
+            .buttonStyle(RetroButtonStyle(tint: Color(red: 0x5C/255.0, green: 0xC8/255.0, blue: 0xE0/255.0), active: track.solo, filled: track.solo, hit: 44))
 
             TrackFader(
                 value: Binding(
@@ -694,7 +711,7 @@ struct TrackControlsView: View {
             .cornerRadius(4)
         }
         .padding(.horizontal, 10)
-        .frame(width: 410)
+        .frame(width: Theme.controlsColumnWidth)
     }
 }
 
@@ -807,7 +824,7 @@ struct LoopGridView: View {
     var body: some View {
         GeometryReader { outerGeo in
             let headerW: CGFloat = 200
-            let controlsW: CGFloat = 410
+            let controlsW = Theme.controlsColumnWidth
             let hPad: CGFloat = 56
             let availableW = max(outerGeo.size.width - headerW - controlsW - hPad, 100)
             let laneWidth = availableW * CGFloat(audio.timelineZoom)
@@ -815,12 +832,20 @@ struct LoopGridView: View {
             HStack(spacing: 0) {
                 // ── Fixed left: track headers + zoom/follow controls ──
                 VStack(spacing: 0) {
+                    // Zoom / follow. The row keeps its 18 pt height — it is the grid's
+                    // vertical rhythm and a taller one would push all eight track rows
+                    // down — so the targets grow along the width it has spare (92 pt of
+                    // it) and not vertically: above the row is the grid's top edge and
+                    // below it is track 1's own select button, which being the later
+                    // sibling would win the hit test in any overlap. The result is a
+                    // 44 × 18 target: full-width, still short of HIG's 44 pt on the
+                    // short axis, and honest about it.
                     HStack(spacing: 4) {
                         Button { audio.zoomOut() } label: {
                             Image(systemName: "minus.magnifyingglass")
                                 .font(.system(size: 10))
                                 .foregroundColor(Theme.textSecondary)
-                                .frame(width: 20, height: 18)
+                                .frame(width: 44, height: 18)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -834,7 +859,7 @@ struct LoopGridView: View {
                             Image(systemName: "plus.magnifyingglass")
                                 .font(.system(size: 10))
                                 .foregroundColor(Theme.textSecondary)
-                                .frame(width: 20, height: 18)
+                                .frame(width: 44, height: 18)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -845,7 +870,7 @@ struct LoopGridView: View {
                             Image(systemName: "scope")
                                 .font(.system(size: 10))
                                 .foregroundColor(audio.playheadFollow ? Theme.accent : Theme.textTertiary)
-                                .frame(width: 20, height: 18)
+                                .frame(width: 44, height: 18)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
@@ -1267,7 +1292,7 @@ struct SideEffectsPanelView: View {
                         Button { audio.moveSlot(from: index, to: index - 1) } label: {
                             Image(systemName: "chevron.up")
                                 .font(.system(size: 9, weight: .bold))
-                                .frame(width: 24, height: 24)
+                                .frame(width: 32, height: 32)
                                 .foregroundColor(Theme.textTertiary)
                                 .contentShape(Rectangle())
                         }
@@ -1277,7 +1302,7 @@ struct SideEffectsPanelView: View {
                         Button { audio.moveSlot(from: index, to: index + 1) } label: {
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 9, weight: .bold))
-                                .frame(width: 24, height: 24)
+                                .frame(width: 32, height: 32)
                                 .foregroundColor(Theme.textTertiary)
                                 .contentShape(Rectangle())
                         }
@@ -1305,13 +1330,16 @@ struct SideEffectsPanelView: View {
                 Button { audio.removeSlot(at: index) } label: {
                     Image(systemName: "xmark")
                         .font(.system(size: 9, weight: .bold))
-                        .frame(width: 24, height: 24)
+                        .frame(width: 32, height: 32)
                         .foregroundColor(Theme.textTertiary)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
-            .padding(.horizontal, 12).padding(.top, 10).padding(.bottom, 8)
+            // 5 rather than 10/8: the row's tallest child just went from 24 to 32 pt, and
+            // a 12-slot chain cannot afford to grow 8 pt per slot. The padding pays for it,
+            // so the row's height is what it was and the panel below it does not move.
+            .padding(.horizontal, 12).padding(.top, 5).padding(.bottom, 5)
 
             // Parameter knobs — fixed 4-column grid
             if !mod.parameters.isEmpty {

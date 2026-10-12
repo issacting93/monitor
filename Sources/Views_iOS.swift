@@ -78,7 +78,7 @@ struct IOSTopBar: View {
                     .padding(.horizontal, 14).padding(.vertical, 8)
                     .foregroundColor(Theme.accent)
             }
-            .buttonStyle(RetroButtonStyle(tint: Theme.accent))
+            .buttonStyle(RetroButtonStyle(tint: Theme.accent, hit: 44))
         }
         .padding(.horizontal, 18).padding(.vertical, 10)
         .background(Theme.surface)
@@ -93,7 +93,11 @@ struct IOSTopBar: View {
                 .tracking(2)
                 .padding(.horizontal, 12).padding(.vertical, 8)
                 .foregroundColor(audio.viewMode == mode ? Theme.accent : Theme.textSecondary)
+                // The underline hugs the text — the 44 pt box is added outside it so the
+                // target grows without the rule drifting away from the label.
                 .overlay(Rectangle().fill(audio.viewMode == mode ? Theme.accent : .clear).frame(height: 2), alignment: .bottom)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -405,22 +409,35 @@ struct IOSEffectCard: View {
                     .foregroundColor(slot.enabled ? Theme.textPrimary : Theme.textEngraved)
                 Spacer()
                 if index > 0 {
-                    Button { audio.moveSlot(from: index, to: index - 1) } label: { Image(systemName: "chevron.up").frame(width: 40, height: 40) }
-                        .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
+                    Button { audio.moveSlot(from: index, to: index - 1) } label: {
+                        Image(systemName: "chevron.up")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
                 }
                 if index < audio.liveChain.count - 1 {
-                    Button { audio.moveSlot(from: index, to: index + 1) } label: { Image(systemName: "chevron.down").frame(width: 40, height: 40) }
-                        .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
+                    Button { audio.moveSlot(from: index, to: index + 1) } label: {
+                        Image(systemName: "chevron.down")
+                            .frame(width: 44, height: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
                 }
                 Button { audio.toggleSlotBypass(index) } label: {
                     Text(slot.enabled ? "ON" : "BYP")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .frame(width: 52, height: 40)
+                        .frame(width: 52, height: 44)
                         .foregroundColor(slot.enabled ? Theme.accent : Theme.textTertiary)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                Button { audio.removeSlot(at: index) } label: { Image(systemName: "xmark").frame(width: 40, height: 40) }
-                    .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
+                Button { audio.removeSlot(at: index) } label: {
+                    Image(systemName: "xmark")
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
             }
 
             if !mod.parameters.isEmpty {
