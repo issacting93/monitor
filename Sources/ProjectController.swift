@@ -202,9 +202,13 @@ final class ProjectController {
         // long clips; reading them on the main thread stalls the UI on open).
         var plan: [(trackIndex: Int, duration: Double, url: URL)] = []
         var missingFiles: [String] = []
+        var escapedFiles: [String] = []
         for td in proj.tracks where td.index < Theme.trackCount {
             for cd in td.clips {
-                let fileURL = packageURL.appendingPathComponent(cd.relativePath)
+                guard let fileURL = resolveInPackage(cd.relativePath, packageURL: packageURL) else {
+                    escapedFiles.append(cd.relativePath)
+                    continue
+                }
                 if fm.fileExists(atPath: fileURL.path) {
                     plan.append((td.index, cd.duration, fileURL))
                 } else {
@@ -219,17 +223,42 @@ final class ProjectController {
                 return (p.trackIndex, TrackClip(url: p.url, duration: p.duration, peaks: peaks))
             }
             DispatchQueue.main.async {
-                self?.applyLoaded(proj, packageURL: packageURL,
-                                  builtClips: built, missingFiles: missingFiles)
+                self?.applyLoaded(proj, packageURL: packageURL, builtClips: built,
+                                  missingFiles: missingFiles, escapedFiles: escapedFiles)
             }
         }
+    }
+
+    /// Resolves a manifest path against the package root, or nil when it escapes it.
+    ///
+    /// `relativePath` comes straight out of `project.json` — a file on disk anyone can
+    /// edit — and whatever it names is read and decoded into a clip, so a path like
+    /// `../../Documents/notes.wav` has to be refused rather than followed. An absolute
+    /// path and the `.`/`..` traversal components are rejected outright; the containment
+    /// check afterwards catches what those miss, which is a symlink inside the package
+    /// pointing out of it — that is why the comparison is on the *resolved* path.
+    private func resolveInPackage(_ relativePath: String, packageURL: URL) -> URL? {
+        guard !relativePath.isEmpty, !relativePath.hasPrefix("/") else { return nil }
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false)
+        guard components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else { return nil }
+
+        // Both sides are resolved before comparing: the package itself can be reached
+        // through a symlink (/tmp is one on macOS), and an unresolved root would then
+        // fail to match its own children.
+        let root = packageURL.resolvingSymlinksInPath().standardizedFileURL
+        let resolved = root.appendingPathComponent(relativePath)
+            .standardizedFileURL
+            .resolvingSymlinksInPath()
+        let rootPath = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        guard resolved.path.hasPrefix(rootPath) else { return nil }
+        return resolved
     }
 
     // Applies a decoded project on the main thread, after the off-main clip peak
     // decode in `performLoad`.
     private func applyLoaded(_ proj: ProjectData, packageURL: URL,
                              builtClips: [(trackIndex: Int, clip: TrackClip)],
-                             missingFiles: [String]) {
+                             missingFiles: [String], escapedFiles: [String]) {
         let m = manager
         var newTracks = (0..<Theme.trackCount).map { TrackInfo(id: $0) }
         for td in proj.tracks where td.index < Theme.trackCount {
@@ -272,10 +301,18 @@ final class ProjectController {
         m.projectName = packageURL.deletingPathExtension().lastPathComponent
         m.projectDirty = false
 
-        if missingFiles.isEmpty {
-            m.status = "Loaded \(m.projectName)"
-        } else {
-            m.status = "Loaded \(m.projectName) (\(missingFiles.count) missing file\(missingFiles.count == 1 ? "" : "s"))"
+        // Report both kinds of dropped clip rather than loading quietly short: a missing
+        // file is a moved project, a path outside the package is a manifest that was
+        // hand-edited, and the user should be able to tell which they are looking at.
+        var notes: [String] = []
+        if !missingFiles.isEmpty {
+            notes.append("\(missingFiles.count) missing file\(missingFiles.count == 1 ? "" : "s")")
         }
+        if !escapedFiles.isEmpty {
+            notes.append("\(escapedFiles.count) path\(escapedFiles.count == 1 ? "" : "s") outside the project")
+        }
+        m.status = notes.isEmpty
+            ? "Loaded \(m.projectName)"
+            : "Loaded \(m.projectName) (\(notes.joined(separator: ", ")))"
     }
 }
