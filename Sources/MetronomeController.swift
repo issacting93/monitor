@@ -23,6 +23,16 @@ final class MetronomeController {
     private var nextBeatFrame: Double = 0
     private var scheduledBPM: Double = 0
 
+    // Beat observation. Whatever needs to act *on* the beat — today the count-in — listens
+    // here rather than running its own clock, so it acts on the grid instead of near it.
+    private struct ScheduledBeat {
+        let index: Int      // position in the bar: 0 is a downbeat
+        let frame: Double   // the player node's own timeline
+    }
+    private var beatTable: [ScheduledBeat] = []
+    private var observerTimer: Timer?
+    private var onBeat: ((Int) -> Void)?
+
     // Tap tempo
     private var tapTimestamps: [Date] = []
 
@@ -32,6 +42,7 @@ final class MetronomeController {
 
     deinit {
         timer?.invalidate()
+        observerTimer?.invalidate()
     }
 
     /// True while the refill timer is installed (i.e. the metronome is running).
@@ -142,6 +153,11 @@ final class MetronomeController {
             nextBeatFrame = newInterval.map { (1 - phase) * $0 } ?? 0
             // beatCount is deliberately left alone: the accent pattern continues on the
             // same beats of the bar rather than restarting the bar under the user.
+            //
+            // The queued beats died with the old timeline, so their frames describe
+            // nothing now. An observer would act on a beat that never sounds; refill
+            // below repopulates from the new grid.
+            beatTable.removeAll(keepingCapacity: true)
         }
 
         guard let interval = framesPerBeat(sampleRate: sampleRate, bpm: manager.metronomeBPM) else { return }
@@ -157,6 +173,11 @@ final class MetronomeController {
             let at = AVAudioTime(sampleTime: AVAudioFramePosition(nextBeatFrame.rounded()),
                                  atRate: sampleRate)
             player.scheduleBuffer(isAccent ? accent : click, at: at, options: [], completionHandler: nil)
+            // Recorded only while something is listening: the count-in is the only
+            // observer, and a table nobody reads would grow for as long as the clicks run.
+            if onBeat != nil {
+                beatTable.append(ScheduledBeat(index: beatCount, frame: nextBeatFrame))
+            }
             beatCount += 1
             nextBeatFrame += interval
         }
@@ -177,12 +198,92 @@ final class MetronomeController {
         return Double(pt.sampleTime)
     }
 
+    // MARK: - Beat observation
+
+    /// Reports each beat to `handler` on the main thread, in order, as it sounds.
+    ///
+    /// Returns false when there is no grid to report from — the metronome is not running,
+    /// which is the state a count-in finds when the user has the clicks switched off.
+    /// Callers that need a beat either way have to bring their own clock.
+    @discardableResult
+    func observeBeats(_ handler: @escaping (Int) -> Void) -> Bool {
+        guard isRunning, let player = player, let click = clickBuffer,
+              let interval = framesPerBeat(sampleRate: click.format.sampleRate, bpm: scheduledBPM)
+        else { return false }
+
+        onBeat = handler
+        rebuildBeatTable(from: playheadFrame(of: player), interval: interval)
+
+        observerTimer?.invalidate()
+        // Added in the common run-loop mode rather than the default one: a count-in that
+        // stops counting because the user scrolled the timeline would start the take
+        // whenever the scroll ended.
+        let t = Timer(timeInterval: 0.01, repeats: true) { [weak self] _ in self?.pollBeats() }
+        RunLoop.main.add(t, forMode: .common)
+        observerTimer = t
+        // One pass now, so a beat that has just sounded is reported without waiting for
+        // the first tick.
+        pollBeats()
+        return true
+    }
+
+    /// Stops reporting beats. Safe to call when nothing is observing.
+    func disarmBeats() {
+        observerTimer?.invalidate(); observerTimer = nil
+        onBeat = nil
+        beatTable.removeAll(keepingCapacity: true)
+    }
+
+    /// Fires the observer for every beat the player's clock has reached.
+    private func pollBeats() {
+        guard let player = player else { return }
+        let now = playheadFrame(of: player)
+        while let head = beatTable.first, head.frame <= now {
+            beatTable.removeFirst()
+            // Re-read every pass: the count-in disarms itself on the beat it was waiting
+            // for, and a stall can leave several beats to catch up on in one pass.
+            guard let handler = onBeat else { return }
+            handler(head.index)
+        }
+    }
+
+    /// Rebuilds the table from the beats `refill` has already queued.
+    ///
+    /// Without this the first beat an observer could ever see would be the one queued
+    /// after the two-second lookahead drains — a bar of silence at the top of a count.
+    private func rebuildBeatTable(from now: Double, interval: Double) {
+        beatTable.removeAll(keepingCapacity: true)
+        guard onBeat != nil else { return }
+
+        // Walk back from the next unscheduled beat to the first that has not sounded. The
+        // eighth-of-a-beat of slack is what makes a press landing within a 32nd note of a
+        // click a press *on* that click; it also covers the frames between `play()` and the
+        // node's clock reporting anything at all. Frames are rebuilt from `nextBeatFrame`
+        // rather than by accumulating from the walk-back, so they land exactly on the beats
+        // `refill` will schedule and no beat is reported twice.
+        let slack = interval / 8
+        let earliest = max(0, now - slack)
+        var first = beatCount
+        while first > 0 {
+            // The beat before `first`, whose frame is `interval` below it.
+            let previous = nextBeatFrame - Double(beatCount - first + 1) * interval
+            guard previous >= earliest else { break }
+            first -= 1
+        }
+        for i in first..<beatCount {
+            beatTable.append(ScheduledBeat(index: i,
+                                           frame: nextBeatFrame - Double(beatCount - i) * interval))
+        }
+    }
+
     func stop() {
         timer?.invalidate(); timer = nil
         player?.stop()
         beatCount = 0
         nextBeatFrame = 0
         scheduledBPM = 0
+        // The beats in the table were frames on a timeline that no longer exists.
+        disarmBeats()
     }
 
     // MARK: - Click generation

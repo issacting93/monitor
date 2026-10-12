@@ -357,10 +357,10 @@ final class TransportController {
             manager.stopRecording()
             startTrackLoop(i)
         } else {
-            // Covers the count-in case too: `start()` re-arms a running count from bar 1
-            // rather than dropping straight into recording. Aborting a count-in is STOP's
-            // job, and doing it from here as well would leave REC and STOP both meaning
-            // "cancel" while nothing meant "count again".
+            // Covers the count-in case too: `start()` re-arms a running count at the next
+            // bar line rather than dropping straight into recording. Aborting a count-in is
+            // STOP's job, and doing it from here as well would leave REC and STOP both
+            // meaning "cancel" while nothing meant "count again".
             manager.startRecording()
         }
     }

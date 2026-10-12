@@ -16,6 +16,10 @@ final class RecordingController {
     private var recordingStart: Date?
     private var recordingTimer: Timer?
     private var countInTimer: Timer?
+    /// The beat the count ends on, in the metronome's own running count. Fixed by the
+    /// first beat the count-in hears, since only that one says which beat of the bar we
+    /// pressed REC on; nil while it is still being worked out.
+    private var countInTargetBeat: Int?
 
     // Capture pipeline. The dry tap runs on the audio render thread, so it must not do
     // file I/O or allocate; it copies interleaved stereo frames into a fixed ring instead.
@@ -65,6 +69,11 @@ final class RecordingController {
     func detach() {
         recordingTimer?.invalidate(); recordingTimer = nil
         countInTimer?.invalidate(); countInTimer = nil
+        countInTargetBeat = nil
+        // The metronome tears down alongside this, but the order is the engine's to
+        // choose: leaving a beat observer installed would let a count-in start a take
+        // against a node that no longer exists.
+        manager.metronome.disarmBeats()
         // Freeze the tap, flush what is queued, then drop the ring/file.
         captureLock.withLock { capture.capturing = false }
         stopDrainTimerAndFlush()
@@ -158,18 +167,24 @@ final class RecordingController {
 
         // Count-in: play metronome clicks for N bars before actually recording.
         //
-        // Pressing REC again re-arms the count from bar 1. It must not fall through to
-        // `begin()`: that started recording on the spot *and* left the pending timer to
-        // fire mid-take, opening a second file over the first.
+        // The count rides the click grid rather than a wall clock. `observeBeats` hands
+        // back each beat on the metronome's own timeline, so bar 1 of the count is a real
+        // downbeat — accent and all — and the take starts on the downbeat that ends it,
+        // instead of wherever `240 / BPM × bars` seconds of free-running timer landed.
+        // A second press re-targets the next bar line without touching the node, which is
+        // what used to pull the clicks out of phase with a track already looping.
         if m.countInBars > 0 {
-            let rearming = m.countingIn
-            countInTimer?.invalidate()
+            countInTimer?.invalidate(); countInTimer = nil
+            countInTargetBeat = nil
             m.countingIn = true
             m.status = "Count-in..."
-            // On a re-arm the clicks restart with the count, so the new count is heard
-            // from bar 1 instead of against the phase the old one left behind.
-            if rearming { m.metronome.stop() }
             if !m.metronome.isRunning { m.metronome.start() }
+            if m.metronome.observeBeats({ [weak self] index in self?.countInBeat(index) }) {
+                return
+            }
+            // No grid to ride: the count-in starts the metronome, but a user who has the
+            // clicks switched off leaves no node to observe — and their count is silent
+            // either way. Fall back to the wall clock, which is what this always was.
             let secsPerBar = 240.0 / m.metronomeBPM
             let countInDuration = secsPerBar * Double(m.countInBars)
             countInTimer = Timer.scheduledTimer(withTimeInterval: countInDuration, repeats: false) { [weak self] _ in
@@ -182,6 +197,35 @@ final class RecordingController {
             }
             return
         }
+        begin()
+    }
+
+    /// One metronome beat while a count-in is pending.
+    ///
+    /// The first beat heard fixes the phase — the count has to begin on a bar line, and
+    /// which beat of the bar we are on is the only thing standing between "count one bar"
+    /// and "count one bar starting at the next downbeat". Every beat after that is a step
+    /// towards the one the take starts on.
+    private func countInBeat(_ index: Int) {
+        let m = manager
+        guard m.countingIn else { m.metronome.disarmBeats(); return }
+
+        let target: Int
+        if let t = countInTargetBeat {
+            target = t
+        } else {
+            // Beats are counted 0, 1, 2, 3 per bar with 0 accented, so the next bar line
+            // is the next beat whose index is a multiple of four — this one, if we are
+            // already on it.
+            let toNextBar = (4 - (index % 4)) % 4
+            target = index + toNextBar + 4 * max(1, m.countInBars)
+            countInTargetBeat = target
+        }
+        guard index >= target else { return }
+
+        countInTargetBeat = nil
+        m.countingIn = false
+        m.metronome.disarmBeats()
         begin()
     }
 
@@ -222,6 +266,10 @@ final class RecordingController {
         // Cancel count-in if active
         if m.countingIn {
             countInTimer?.invalidate(); countInTimer = nil
+            countInTargetBeat = nil
+            // The beats are the metronome's to report, so it is told to stop reporting —
+            // a count that kept listening after the cancel would start the take anyway.
+            m.metronome.disarmBeats()
             m.countingIn = false
             m.status = "Count-in cancelled"
             if !m.tracks.contains(where: { $0.isPlaying }) { m.metronome.stop() }
