@@ -51,7 +51,6 @@ struct TrackInfo: Identifiable {
     var muted = false
     var solo = false
     var isPlaying = false
-    var loopProgress: Double = 0
     var layerCount: Int { clips.count }
 }
 

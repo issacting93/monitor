@@ -456,6 +456,7 @@ struct WaveformLaneView: View {
     let index: Int
     let track: TrackInfo
     @ObservedObject var audio: AudioManager
+    @ObservedObject var live: LiveState
     let totalBars: Int
     let secsPerBar: Double
     let laneWidth: CGFloat
@@ -530,7 +531,7 @@ struct WaveformLaneView: View {
                 if track.isPlaying {
                     let lastClip = track.clips.last
                     let clipDur = lastClip?.duration ?? 1
-                    let playX = CGFloat(track.loopProgress) * CGFloat(clipDur / secsPerBar) * barWidth
+                    let playX = CGFloat(live.trackProgress[index]) * CGFloat(clipDur / secsPerBar) * barWidth
                     Rectangle()
                         .fill(Theme.textPrimary)
                         .frame(width: 1)
@@ -584,6 +585,7 @@ struct TrackControlsView: View {
     let index: Int
     let track: TrackInfo
     @ObservedObject var audio: AudioManager
+    @ObservedObject var live: LiveState
 
     private var color: Color { Theme.trackColor(index) }
 
@@ -649,7 +651,7 @@ struct TrackControlsView: View {
                 .frame(width: 32, alignment: .trailing)
 
             GeometryReader { geo in
-                let lvl = index < audio.trackLevels.count ? audio.trackLevels[index] : 0
+                let lvl = index < live.trackLevels.count ? live.trackLevels[index] : 0
                 ZStack(alignment: .leading) {
                     Rectangle().fill(Theme.surfaceInset)
                     Rectangle()
@@ -720,6 +722,7 @@ struct BarRulerView: View {
 
 struct LoopGridView: View {
     @ObservedObject var audio: AudioManager
+    @ObservedObject var live: LiveState
 
     private var secsPerBar: Double { 240.0 / audio.metronomeBPM }
     private var totalBars: Int {
@@ -731,8 +734,8 @@ struct LoopGridView: View {
 
     // Quantized playhead tick for driving scroll-follow (~20 updates/loop)
     private var playheadTick: Int {
-        guard let t = audio.tracks.first(where: { $0.isPlaying && !$0.clips.isEmpty }) else { return 0 }
-        return Int(t.loopProgress * 20)
+        guard let idx = audio.tracks.firstIndex(where: { $0.isPlaying && !$0.clips.isEmpty }) else { return 0 }
+        return Int(live.trackProgress[idx] * 20)
     }
 
     var body: some View {
@@ -835,7 +838,7 @@ struct LoopGridView: View {
                                 let trk = audio.tracks[i]
                                 let anySolo = audio.tracks.contains { $0.solo }
                                 let audible = anySolo ? trk.solo : !trk.muted
-                                WaveformLaneView(index: i, track: trk, audio: audio,
+                                WaveformLaneView(index: i, track: trk, audio: audio, live: live,
                                                  totalBars: totalBars, secsPerBar: secsPerBar,
                                                  laneWidth: laneWidth)
                                     .padding(.vertical, 6)
@@ -878,7 +881,7 @@ struct LoopGridView: View {
                         let trk = audio.tracks[i]
                         let anySolo = audio.tracks.contains { $0.solo }
                         let audible = anySolo ? trk.solo : !trk.muted
-                        TrackControlsView(index: i, track: trk, audio: audio)
+                        TrackControlsView(index: i, track: trk, audio: audio, live: live)
                             .frame(height: 52)
                             .padding(.vertical, 6)
                             .opacity(audible ? 1 : 0.32)
@@ -891,10 +894,10 @@ struct LoopGridView: View {
     }
 
     private func playheadFraction() -> Double {
-        guard let t = audio.tracks.first(where: { $0.isPlaying && !$0.clips.isEmpty }),
-              let lastClip = t.clips.last else { return 0 }
+        guard let idx = audio.tracks.firstIndex(where: { $0.isPlaying && !$0.clips.isEmpty }),
+              let lastClip = audio.tracks[idx].clips.last else { return 0 }
         let clipBars = lastClip.duration / secsPerBar
-        return t.loopProgress * clipBars / Double(totalBars)
+        return live.trackProgress[idx] * clipBars / Double(totalBars)
     }
 }
 
@@ -1447,6 +1450,7 @@ struct ReelView: View {
 
 struct ArrangeHeadUnit: View {
     @ObservedObject var audio: AudioManager
+    @ObservedObject var live: LiveState
 
     private var timerText: String {
         let t = audio.recordingDuration
@@ -1600,9 +1604,9 @@ struct ArrangeHeadUnit: View {
                             .tracking(3)
                             .foregroundColor(Theme.textSecondary)
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text(audio.peakDB.isFinite ? String(format: "%.1f", audio.peakDB) : "\u{2212}\u{221E}")
+                            Text(live.peakDB.isFinite ? String(format: "%.1f", live.peakDB) : "\u{2212}\u{221E}")
                                 .font(.system(size: 28, weight: .light, design: .monospaced))
-                                .foregroundColor(audio.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
+                                .foregroundColor(live.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
                                 .monospacedDigit()
                             Text("dB")
                                 .font(.system(size: 12, weight: .regular, design: .monospaced))
@@ -1622,8 +1626,8 @@ struct ArrangeHeadUnit: View {
 
                 // Vertical L/R meters
                 HStack(spacing: 4) {
-                    VerticalMeter(label: "L", level: audio.levelL, peak: audio.peakL)
-                    VerticalMeter(label: "R", level: audio.levelR, peak: audio.peakR)
+                    VerticalMeter(label: "L", level: live.levelL, peak: live.peakL)
+                    VerticalMeter(label: "R", level: live.levelR, peak: live.peakR)
                     VStack {
                         Text("0").frame(maxHeight: .infinity, alignment: .top)
                         Text("-6").frame(maxHeight: .infinity)
@@ -1663,6 +1667,7 @@ struct ArrangeHeadUnit: View {
 
 struct MonitorView: View {
     @ObservedObject var audio: AudioManager
+    @ObservedObject var live: LiveState
 
     private var timerText: String {
         let t = audio.recordingDuration
@@ -1753,11 +1758,11 @@ struct MonitorView: View {
 
                     // Waveform bars
                     Path { path in
-                        let count = audio.waveformSamples.count
+                        let count = live.waveformSamples.count
                         guard count > 0 else { return }
                         let barWidth: CGFloat = 3
                         let spacing = geo.size.width / CGFloat(count)
-                        for (i, val) in audio.waveformSamples.enumerated() {
+                        for (i, val) in live.waveformSamples.enumerated() {
                             let x = CGFloat(i) * spacing + spacing / 2
                             let h = CGFloat(val) * (geo.size.height / 2.2)
                             let rect = CGRect(x: x - barWidth / 2, y: midY - h,
@@ -1784,8 +1789,8 @@ struct MonitorView: View {
             // Horizontal L/R meters
             HStack(spacing: 12) {
                 VStack(spacing: 4) {
-                    hMeter(label: "L", level: audio.levelL, peak: audio.peakL)
-                    hMeter(label: "R", level: audio.levelR, peak: audio.peakR)
+                    hMeter(label: "L", level: live.levelL, peak: live.peakL)
+                    hMeter(label: "R", level: live.levelR, peak: live.peakR)
                     // dB scale
                     GeometryReader { geo in
                         ZStack {
@@ -1807,9 +1812,9 @@ struct MonitorView: View {
                         .font(.system(size: 8, weight: .medium, design: .monospaced))
                         .tracking(2)
                         .foregroundColor(Theme.textTertiary)
-                    Text(audio.peakDB.isFinite ? String(format: "%+.1f dB", audio.peakDB) : "\u{2212}\u{221E} dB")
+                    Text(live.peakDB.isFinite ? String(format: "%+.1f dB", live.peakDB) : "\u{2212}\u{221E} dB")
                         .font(.system(size: 22, weight: .light, design: .monospaced))
-                        .foregroundColor(audio.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
+                        .foregroundColor(live.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
                         .monospacedDigit()
                 }
                 .frame(width: 110, alignment: .trailing)

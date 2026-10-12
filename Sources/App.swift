@@ -152,18 +152,10 @@ struct ContentView: View {
             TopBar(audio: audio)
 
             HStack(spacing: 0) {
-                if audio.showSettings {
-                    SettingsPanel(audio: audio)
-                }
-
-                if audio.showEffects {
-                    SideEffectsPanelView(audio: audio)
-                }
-
                 if audio.viewMode == 0 {
                     // Arrange view
                     VStack(spacing: 0) {
-                        ArrangeHeadUnit(audio: audio)
+                        ArrangeHeadUnit(audio: audio, live: audio.live)
 
                         // Track label
                         HStack {
@@ -175,7 +167,7 @@ struct ContentView: View {
                         }
                         .padding(.horizontal, 28).padding(.top, 14).padding(.bottom, 6)
 
-                        LoopGridView(audio: audio)
+                        LoopGridView(audio: audio, live: audio.live)
                             .frame(maxHeight: .infinity)
 
                         if audio.trimmingTrack != nil {
@@ -186,9 +178,18 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     // Monitor view
-                    MonitorView(audio: audio)
+                    MonitorView(audio: audio, live: audio.live)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
+            }
+            // Settings / FX are inspector drawers that float over the content, so
+            // showing them never squeezes (and clips) the tape grid at any window width.
+            .overlay(alignment: .leading) {
+                HStack(spacing: 0) {
+                    if audio.showSettings { SettingsPanel(audio: audio) }
+                    if audio.showEffects  { SideEffectsPanelView(audio: audio) }
+                }
+                .shadow(color: .black.opacity(0.55), radius: 16, x: 6, y: 0)
             }
 
             TransportBar(audio: audio)

@@ -54,7 +54,7 @@ final class DeviceController {
 
             if self.manager.selectedOutputID == nil
                 || !outputs.contains(where: { $0.id == self.manager.selectedOutputID }) {
-                self.manager.selectedOutputID = outputs.first?.id
+                self.manager.selectedOutputID = self.io.defaultOutputID ?? outputs.first?.id
             }
         }
     }
@@ -88,7 +88,7 @@ final class DeviceController {
     func switchOutput(to id: DeviceID) {
         guard io.outputSelectionSupported else { return }
         manager.selectedOutputID = id
-        io.applyOutputDevice(id)
+        // The engine is rebuilt below; start() applies the selected output device.
         if manager.isMonitoring { manager.stopMonitoring(); manager.startMonitoring() }
     }
 

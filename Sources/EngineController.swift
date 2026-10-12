@@ -94,6 +94,9 @@ final class EngineController {
         // Point the engine's input at the chosen device without changing the system
         // default input (macOS AUHAL pin) / set the session's preferred input (iOS).
         m.device.io.applyInputDevice(inID, to: eng)
+        // Route output to the chosen device instead of always following the system
+        // default (so the OUT picker actually works). No-op where unsupported.
+        if let outID = m.selectedOutputID { m.device.io.applyOutputDevice(outID, to: eng) }
         let hwFmt = eng.inputNode.inputFormat(forBus: 0)
 
         guard hwFmt.sampleRate > 0, hwFmt.channelCount > 0 else {

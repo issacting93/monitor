@@ -20,13 +20,11 @@ class AudioManager: ObservableObject {
     @Published var isRecording  = false
     @Published var volume: Double = 0.3
     @Published var inputVolume: Double = 0.3
-    @Published var levelL: Double = 0
-    @Published var levelR: Double = 0
-    @Published var peakL:  Double = 0
-    @Published var peakR:  Double = 0
-    @Published var peakDB: Double = -Double.infinity
-    @Published var waveformSamples: [Double] = Array(repeating: 0, count: Theme.waveformCount)
     @Published var recordingDuration: TimeInterval = 0
+
+    /// High-frequency display state (meters, waveform, playhead progress). Kept off
+    /// the @Published facade so the 60 Hz display tick doesn't re-render the whole tree.
+    let live = LiveState()
     @Published var status = "Ready"
     @Published var sampleRateString = "48 kHz · 24-bit · Stereo"
 
@@ -96,8 +94,7 @@ class AudioManager: ObservableObject {
     // MIDI
     @Published var midiTrackFollow: Bool = true
 
-    // Per-track metering
-    @Published var trackLevels: [Double] = Array(repeating: 0, count: Theme.trackCount)
+    // Per-track metering lives in `live` (LiveState).
 
     // Sub-controllers. AudioManager stays the published facade the views talk to;
     // each controller owns a slice of private engine/algorithm state and reaches

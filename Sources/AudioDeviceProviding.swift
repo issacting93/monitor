@@ -20,6 +20,8 @@ enum DeviceChange {
 protocol AudioDeviceProviding: AnyObject {
     /// macOS can pick an output device; iOS cannot (route is chosen by the system).
     var outputSelectionSupported: Bool { get }
+    /// The platform's current default output device id (macOS); nil where there is no choice.
+    var defaultOutputID: DeviceID? { get }
     /// Human-readable name of the current output, for status lines / read-only labels.
     var currentOutputName: String { get }
 
@@ -32,7 +34,7 @@ protocol AudioDeviceProviding: AnyObject {
     func loadDevices() -> (inputs: [AudioDevice], outputs: [AudioDevice])
     func displayName(for id: DeviceID) -> String
     func applyInputDevice(_ id: DeviceID, to engine: AVAudioEngine)
-    func applyOutputDevice(_ id: DeviceID)
+    func applyOutputDevice(_ id: DeviceID, to engine: AVAudioEngine)
 
     func startObserving(_ onChange: @escaping (DeviceChange) -> Void)
     func stopObserving()

@@ -18,7 +18,7 @@ struct IOSRootView: View {
             IOSTopBar(audio: audio, showFX: $showFX)
             Group {
                 if audio.viewMode == 0 { IOSArrangeView(audio: audio) }
-                else                  { IOSMonitorView(audio: audio) }
+                else                  { IOSMonitorView(audio: audio, live: audio.live) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             IOSTransportBar(audio: audio)
@@ -108,7 +108,7 @@ struct IOSArrangeView: View {
         ScrollView {
             VStack(spacing: 8) {
                 ForEach(0..<Theme.trackCount, id: \.self) { i in
-                    IOSTrackRow(audio: audio, index: i)
+                    IOSTrackRow(audio: audio, live: audio.live, index: i)
                 }
             }
             .padding(16)
@@ -119,6 +119,7 @@ struct IOSArrangeView: View {
 
 struct IOSTrackRow: View {
     @ObservedObject var audio: AudioManager
+    @ObservedObject var live: LiveState
     let index: Int
 
     private var track: TrackInfo { audio.tracks[index] }
@@ -155,7 +156,7 @@ struct IOSTrackRow: View {
                     .lineLimit(1)
                 // Level bar
                 GeometryReader { g in
-                    let lvl = index < audio.trackLevels.count ? audio.trackLevels[index] : 0
+                    let lvl = index < live.trackLevels.count ? live.trackLevels[index] : 0
                     ZStack(alignment: .leading) {
                         Rectangle().fill(Theme.surfaceInset)
                         Rectangle().fill(lvl > 0.9 ? Theme.danger : color.opacity(0.8))
@@ -229,19 +230,20 @@ struct IconToggle: View {
 
 struct IOSMonitorView: View {
     @ObservedObject var audio: AudioManager
+    @ObservedObject var live: LiveState
 
     var body: some View {
         HStack(spacing: 24) {
             // Stereo meters
             VStack(spacing: 10) {
                 HStack(spacing: 12) {
-                    VerticalMeter(label: "L", level: audio.levelL, peak: audio.peakL)
-                    VerticalMeter(label: "R", level: audio.levelR, peak: audio.peakR)
+                    VerticalMeter(label: "L", level: live.levelL, peak: live.peakL)
+                    VerticalMeter(label: "R", level: live.levelR, peak: live.peakR)
                 }
                 .frame(height: 220)
-                Text(audio.peakDB.isFinite ? String(format: "%+.1f dB", audio.peakDB) : "−∞ dB")
+                Text(live.peakDB.isFinite ? String(format: "%+.1f dB", live.peakDB) : "−∞ dB")
                     .font(.system(size: 16, weight: .light, design: .monospaced))
-                    .foregroundColor(audio.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
+                    .foregroundColor(live.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
                     .monospacedDigit()
             }
 
@@ -249,10 +251,10 @@ struct IOSMonitorView: View {
             GeometryReader { geo in
                 let midY = geo.size.height / 2
                 Path { path in
-                    let count = audio.waveformSamples.count
+                    let count = live.waveformSamples.count
                     guard count > 0 else { return }
                     let spacing = geo.size.width / CGFloat(count)
-                    for (i, v) in audio.waveformSamples.enumerated() {
+                    for (i, v) in live.waveformSamples.enumerated() {
                         let x = CGFloat(i) * spacing + spacing / 2
                         let h = CGFloat(v) * (geo.size.height / 2.2)
                         path.addRect(CGRect(x: x - 1, y: midY - h, width: 2, height: h * 2))

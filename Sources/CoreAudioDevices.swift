@@ -68,4 +68,14 @@ func setEngineInputDevice(_ engine: AVAudioEngine, _ id: AudioDeviceID) {
                          kAudioUnitScope_Global, 0, &dev,
                          UInt32(MemoryLayout<AudioDeviceID>.size))
 }
+
+// Points the engine's output node at a specific device. Without this the engine
+// always plays to the system default output and the in-app OUT picker is cosmetic.
+func setEngineOutputDevice(_ engine: AVAudioEngine, _ id: AudioDeviceID) {
+    guard let unit = engine.outputNode.audioUnit else { return }
+    var dev = id
+    AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice,
+                         kAudioUnitScope_Global, 0, &dev,
+                         UInt32(MemoryLayout<AudioDeviceID>.size))
+}
 #endif

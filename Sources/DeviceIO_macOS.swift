@@ -7,6 +7,9 @@ import AVFoundation
 
 final class CoreAudioDeviceProvider: AudioDeviceProviding {
     var outputSelectionSupported: Bool { true }
+    var defaultOutputID: DeviceID? {
+        let id = getDefaultAudioDevice(input: false); return id != 0 ? id : nil
+    }
     var currentOutputName: String { nameOfDevice(getDefaultAudioDevice(input: false)) }
 
     func prepareForEngineStart() throws {}
@@ -25,7 +28,7 @@ final class CoreAudioDeviceProvider: AudioDeviceProviding {
 
     func applyInputDevice(_ id: DeviceID, to engine: AVAudioEngine) { setEngineInputDevice(engine, id) }
 
-    func applyOutputDevice(_ id: DeviceID) {}
+    func applyOutputDevice(_ id: DeviceID, to engine: AVAudioEngine) { setEngineOutputDevice(engine, id) }
 
     // Listeners are intentionally never removed (the process lives as long as the
     // app window); rebuilding the graph on every device change would be worse.

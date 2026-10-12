@@ -29,6 +29,7 @@ final class AVAudioSessionDeviceProvider: AudioDeviceProviding {
 
     // No output-device selection exists on iOS; the route is chosen by the system.
     var outputSelectionSupported: Bool { false }
+    var defaultOutputID: DeviceID? { nil }
 
     var currentOutputName: String {
         AVAudioSession.sharedInstance().currentRoute.outputs.first?.portName ?? "Speaker"
@@ -65,7 +66,7 @@ final class AVAudioSessionDeviceProvider: AudioDeviceProviding {
         try? session.setPreferredInput(ports[Int(id) - 1])
     }
 
-    func applyOutputDevice(_ id: DeviceID) {}
+    func applyOutputDevice(_ id: DeviceID, to engine: AVAudioEngine) {}
 
     func startObserving(_ onChange: @escaping (DeviceChange) -> Void) {
         let center = NotificationCenter.default
