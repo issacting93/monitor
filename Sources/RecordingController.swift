@@ -243,6 +243,9 @@ final class RecordingController {
             m.transport.pushUndo()
             m.recordings.append(rec)
             m.tracks[trk].clips.append(clip)
+            // Register only now that a clip references the file: pushUndo() above runs the
+            // orphan sweep, so registering before the clip exists would delete the take.
+            m.transport.registerSessionFile(u)
             m.transport.loadTrackBuffer(trk)
         }
     }

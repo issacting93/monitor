@@ -30,6 +30,11 @@ final class TransportController {
     private var redoStack: [[TrackInfo]] = []
     private var undoGestureActive = false   // debounce slider drags
 
+    // Audio files this session created (takes, trims, splits, duplicates), by path.
+    // Only these are eligible for cleanup — never the whole save folder, which is
+    // shared across sessions and could lose a prior session's takes.
+    private var sessionCreatedFiles: Set<String> = []
+
     init(manager: AudioManager) {
         self.manager = manager
     }
@@ -214,6 +219,7 @@ final class TransportController {
         redoStack.removeAll()
         if undoStack.count > 30 { undoStack.removeFirst() }
         manager.projectDirty = true
+        collectOrphanedFiles()
     }
 
     /// Push undo only once per gesture (for sliders/continuous controls).
@@ -231,6 +237,7 @@ final class TransportController {
         redoStack.append(manager.tracks)
         if redoStack.count > 30 { redoStack.removeFirst() }
         restoreTracks(snapshot)
+        collectOrphanedFiles()
         manager.status = "Undo"
     }
 
@@ -239,6 +246,7 @@ final class TransportController {
         undoStack.append(manager.tracks)
         if undoStack.count > 30 { undoStack.removeFirst() }
         restoreTracks(snapshot)
+        collectOrphanedFiles()
         manager.status = "Redo"
     }
 
@@ -268,6 +276,40 @@ final class TransportController {
         }
         manager.recordings.removeAll()
         manager.status = "All tracks cleared"
+    }
+
+    // MARK: - Orphaned File Cleanup
+
+    /// Records a file the app just created (a take, trim, split part, or duplicate) so
+    /// it becomes eligible for cleanup once nothing references it. Imported originals
+    /// are never registered, so they are never deleted.
+    func registerSessionFile(_ url: URL) {
+        sessionCreatedFiles.insert(url.standardizedFileURL.path)
+    }
+
+    /// Deletes session-created audio files that no remaining clip references. The
+    /// referenced set spans the current tracks plus every undo/redo snapshot — undo and
+    /// redo are the only paths that can restore a clip, so a file absent from their
+    /// union is unreachable and safe to remove. Runs when that union shrinks (undo-stack
+    /// eviction, redo invalidation), which is why a trim/split/clear stays undoable: its
+    /// pre-op snapshot still holds the file until it ages out of the 30-deep stack.
+    func collectOrphanedFiles() {
+        guard !sessionCreatedFiles.isEmpty else { return }
+        var referenced = Set<String>()
+        func add(_ tracks: [TrackInfo]) {
+            for t in tracks { for c in t.clips {
+                referenced.insert(c.url.standardizedFileURL.path)
+            } }
+        }
+        add(manager.tracks)
+        for snapshot in undoStack { add(snapshot) }
+        for snapshot in redoStack { add(snapshot) }
+
+        let fm = FileManager.default
+        for path in sessionCreatedFiles.filter({ !referenced.contains($0) }) {
+            try? fm.removeItem(atPath: path)
+            sessionCreatedFiles.remove(path)
+        }
     }
 
     // MARK: - Trim Editor
@@ -317,6 +359,7 @@ final class TransportController {
         let dur = Double(trimmedFrames) / srcFile.fileFormat.sampleRate
         let peaks = computePeaks(url: trimURL, count: Theme.clipPeaks)
         manager.tracks[ti].clips[manager.tracks[ti].clips.count - 1] = TrackClip(url: trimURL, duration: dur, peaks: peaks)
+        registerSessionFile(trimURL)   // register only after the clip references it
         trackBuffers[ti] = nil
         loadTrackBuffer(ti)
         manager.trimmingTrack = nil
@@ -388,6 +431,8 @@ final class TransportController {
         manager.tracks[trackIndex].clips.remove(at: clipIndex)
         manager.tracks[trackIndex].clips.insert(clipA, at: clipIndex)
         manager.tracks[trackIndex].clips.insert(clipB, at: clipIndex + 1)
+        registerSessionFile(urlA)   // register only after the clips reference them
+        registerSessionFile(urlB)
 
         trackBuffers[trackIndex] = nil
         loadTrackBuffer(trackIndex)
@@ -421,6 +466,7 @@ final class TransportController {
                                 fadeIn: clip.fadeIn, fadeOut: clip.fadeOut)
         pushUndo()
         manager.tracks[trackIndex].clips.insert(newClip, at: ci + 1)
+        registerSessionFile(dupURL)   // register only after the clip references it
         trackBuffers[trackIndex] = nil
         loadTrackBuffer(trackIndex)
         manager.projectDirty = true
