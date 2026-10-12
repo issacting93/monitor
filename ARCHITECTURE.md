@@ -8,7 +8,7 @@ shared audio core.
 - **UI:** SwiftUI (separate macOS and iPad view layers)
 - **Audio:** AVFoundation (`AVAudioEngine`) + CoreAudio HAL / `AVAudioSession` (device layer) +
   CoreMIDI (track follow)
-- **Source:** 25 files in `Sources/`, ~8,340 lines (shared core + both UIs)
+- **Source:** 25 files in `Sources/`, ~8,530 lines (shared core + both UIs)
 - **Build paths:** `package.sh` (macOS, head-less `swiftc`), `Tape08/` (macOS Xcode project),
   `Tape08iPad/` (iPad Xcode project)
 
@@ -42,11 +42,14 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
 - Per track: play/stop, volume, pan, mute, solo, level meter.
 - **Loop** playback (repeat forever) or **one-shot** (play once, stop) — toggled globally.
 - Play-all / stop-all, per-track loop, selected-track model (drives FX chain, recording, edits).
+- **Seek** — dragging the bar ruler places playback at that fraction of each track's own clip;
+  while stopped the position is parked and PLAY starts from it. Stop returns to the start.
 - Playhead progress per track, driving the timeline playhead and scroll-follow.
 
 ### 1.4 Recording
 - Captures the **dry** (pre-FX) signal to a WAV under the save location.
-- Optional **count-in** (0 / 1 / 2 / 4 bars) before recording starts.
+- Optional **count-in** (0 / 1 / 2 / 4 bars) before recording starts. Pressing REC again re-arms it
+  from bar 1; STOP aborts it.
 - Elapsed-time display; on stop the take becomes a new clip on the selected track.
 - Recording/f FX: takes are dry by design; effects are heard live but not printed.
 
@@ -158,7 +161,7 @@ Metronome  Device   EffectsChain Transport Meter Recording Project Engine
 | `MetronomeController` | click buffers, player/mixer nodes, refill timer, tap history | `metronome*`, `tapTempoFlash` |
 | `DeviceController` | CoreAudio listeners, CoreMIDI client/port | `inputDevices`, `outputDevices`, `selectedInputID/OutputID`, `selectedTrack` (MIDI) |
 | `EffectsChainController` | instantiated chain nodes, preset dir | `liveChain`, `presetNames`, `showPresetSave`, `presetSaveName`, `status` |
-| `TransportController` | player/mixer nodes, decoded buffers, play generations, undo/redo stacks | `tracks`, `isPlaying`, `projectDirty`, trim state, `bounceStatus` |
+| `TransportController` | player/mixer nodes, decoded buffers, play generations & seek offsets, undo/redo stacks | `tracks`, `isPlaying`, `seekFraction`, `projectDirty`, trim state, `bounceStatus` |
 | `MeterController` | locked meter snapshot, display timer, taps, smoothing state | `live.meters.*`, `live.trackMeters.levels`, `live.playhead.trackProgress` |
 | `RecordingController` | `AVAudioFile` handle, dry tap, count-in/take timers | `isRecording`, `countingIn`, `recordingDuration`, `recordings`, `tracks` |
 | `ProjectController` | — | `projectURL`, `projectName`, `projectDirty`, `status` |
@@ -350,15 +353,15 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 
 | File | Lines | Platform | Responsibility |
 |------|------:|----------|----------------|
-| `Views.swift` | 2469 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
-| `TransportController.swift` | 1074 | shared | Playback, undo/redo, clip editing & selection, mixdown |
+| `Views.swift` | 2519 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
+| `TransportController.swift` | 1194 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
 | `EffectsKernels.swift` | 763 | shared | Custom DSP kernels |
 | `EffectsCore.swift` | 503 | shared | Module/registry/chain/AU-host core + Apple module defs |
 | `Views_iOS.swift` | 446 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
-| `AudioManager.swift` | 347 | shared | The `ObservableObject` facade: published state + forwarders |
+| `AudioManager.swift` | 358 | shared | The `ObservableObject` facade: published state + forwarders |
 | `EngineController.swift` | 326 | shared | `AVAudioEngine` graph spine + async kernel insert |
 | `ProjectController.swift` | 281 | shared (`[mac]` panels) | `.xyproj` save/load |
-| `RecordingController.swift` | 273 | shared | Count-in + dry capture |
+| `RecordingController.swift` | 286 | shared | Count-in + dry capture |
 | `App.swift` | 248 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
 | `CoreAudioDevices.swift` | 217 | `[mac]` | CoreAudio HAL enumeration/selection helpers + the aggregate device for clock-master I/O |
 | `MetronomeController.swift` | 198 | shared | Click scheduling + tap tempo |
@@ -384,8 +387,9 @@ Full detail and severities are in [to_fix.md §8](to_fix.md). Highest-impact **o
 
 - **UI-1** — the tape timeline clips when the settings + FX panels are open (fixed-width panels).
 - **U1** — count-in is timed by a `Timer`, not aligned to the metronome grid.
-- **U2** — only a track's **last** clip is decoded and played, so split-at-playhead is confined to it
-  and a stopped take has no stationary playhead to cut at.
+- **U2** — only a track's **last** clip is decoded and played, so trim/duplicate/split on an earlier
+  take are silent. Since 2026-10-12 a ruler drag parks a playhead that a *stopped* take can be split
+  at, but it is placed on the ruler's span, not inside a lane, and is per-track-normalised.
 - **H5** — a multichannel input interface meets a stereo graph on connect (no explicit downmix).
 - **H6** — project load builds file paths from `project.json` without sanitising them.
 
@@ -408,6 +412,13 @@ with ⌘1–⌘8, and TRIM / DUP / IMPORT / EXPORT act on the selection rather t
 `editTargetIndex` resolves it at use time and falls back to the last take, every surface that names
 the current take resolves through it, and a selection the user moves mid-edit is not overwritten
 when the edit lands. SPLIT stays confined to the last take — see **U2**).
+
+Fixed after the first hardware run (2026-10-12), all three reported together and all three transport
+lifecycle faults the compiler could not have caught: **STOP** stopped playback and the metronome but
+not the recorder, so a pending count-in outlived the stop and began recording afterwards;
+**REC** therefore found `countingIn` still set and fell straight through its count-in branch; and
+there was **no seek control at all**. See `to_fix.md` §8.7 for the fix table — the seek is new
+behaviour rather than a repair and is the one item still carrying unverified risk.
 
 Stage 0d's clock-master change for aggregate I/O has **not** been run on hardware.
 

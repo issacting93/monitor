@@ -532,19 +532,26 @@ playback, and feeds C2.
 ## 8.4 UX correctness
 
 **U1 — Count-in is not aligned to the metronome grid.** `RecordingController.start`
-(`RecordingController.swift:151`) uses a one-shot `Timer` for `secsPerBar * countInBars` (`:156-161`)
+(`RecordingController.swift:164`) uses a one-shot `Timer` for `secsPerBar * countInBars` (`:175-184`)
 and then records; the metronome schedules its own beat grid from `play()` with a different phase. If
 the metronome was already running, or the tempo changes, the count-in clicks won't line up with where
 recording starts. Timer drift adds more error.
 → **Do:** drive the count-in from the metronome's `beatCount` (record on the N-th future beat).
+*2026-10-12:* re-pressing REC now restarts the count *and* the clicks, so a re-arm is heard from bar
+1 — but a first count still inherits whatever phase a running metronome is on. U1 stands.
 
-**U2 — Split requires active playback and a mid-clip playhead.** `splitClipAtPlayhead`
-(`TransportController.swift:588`) reads the live per-track playhead, which is only non-zero while the
-track plays, and the Settings "SPLIT" button is disabled unless a take is resolvable
-(`Views.swift:2300`). You cannot split a stopped clip at a chosen point. H2 (2026-10-12) narrowed
-this: the split now targets the *selected* take, but still only while playing, and only when that
-take is the track's last one.
-→ **Do:** introduce a stationary timeline playhead for edits.
+**U2 — Split requires a playhead you can place.** `splitClipAtPlayhead`
+(`TransportController.swift:701`) reads the live per-track playhead. H2 (2026-10-12) narrowed this:
+the split now targets the *selected* take, though still only when that take is the track's last one.
+The 2026-10-12 seek narrowed it further: dragging the bar ruler parks `seekFraction` and writes the
+same value into `trackProgress`, so a *stopped* clip can now be split at the dragged position, and
+the Settings button asks for a playhead rather than for playback (`Views.swift:2350`).
+→ **Still missing:** the position can only be placed on the ruler's span (`BarRulerView`, normalised
+per track and scaled to the longest clip), not inside a lane, and every track reads the same fraction
+of its *own* clip rather than a shared tape position. `clips.last` is still the only take decoded and
+played (`loadTrackBuffer`, `TransportController.swift:1156`), so trim, duplicate and split on an
+earlier take are silent.
+→ **Do:** a playhead you can place inside a lane, and real multi-clip playback for it to describe.
 
 **U3 — MIDI track-follow reacts to every channel-voice message.** `DeviceController.setupMIDI`
 (`DeviceController.swift:98`) selects a track on *any* UMP channel-voice type `0x2`, including
@@ -586,6 +593,15 @@ Run `open "Tape 08.app"` and walk this matrix; it is the part the refactor could
 - **Lifecycle & permissions** — first-run mic prompt, deny→message, start/stop, feedback warning.
 - **Capture** — record a take, hear it back; confirm the take is **dry** (pre-FX).
 - **Count-in (U1)** — with metronome on, 1/2/4-bar count-in: do clicks line up with the record start?
+- **Count-in lifecycle (2026-10-12)** — press REC, then REC again while it counts: the count must
+  restart from bar 1, clicks included, and the button must read `IN` while it runs. Press STOP
+  mid-count: the count must end and nothing must be recorded. Press STOP mid-take: the take must be
+  filed and playback stopped. Confirm no second take appears a few seconds after a STOP.
+- **Seek (2026-10-12)** — drag the bar ruler while playing: the loop must restart from where the
+  pointer was released, without a click at the join, and the per-track playhead must not snap back to
+  zero. Drag to the far left: the loop restarts from the top. Drag while stopped: a stationary
+  playhead appears in every lane that has a clip, at the same x as the ruler marker; PLAY must then
+  start from there. STOP must clear it.
 - **Metronome** — accent every 4, tap tempo, BPM change mid-play (U4), volume.
 - **Metering** — L/R RMS + peak-hold + dB readout; per-track meters; check for UI hitching under load (P1).
 - **Effects** — add/remove/reorder/bypass each of the 13 modules; sweep knobs and confirm audible
@@ -625,6 +641,21 @@ Run `open "Tape 08.app"` and walk this matrix; it is the part the refactor could
 behaviour still needs a hardware pass): `P1`, `C4`, `H1`–`H4`. See §8.1–§8.3 for what each fix
 does. `U2` is the one that grew out of `H2`: only a track's last clip is decoded and played, so
 trim and duplicate now work on any selected take but split is still confined to the last one.
+
+**Landed 2026-10-12, from the first hardware run** — three transport faults reported together, none
+of which compilation could have caught:
+
+| Reported | Cause | Fix |
+|---|---|---|
+| STOP didn't stop | `stopAll` stopped playback and the metronome but not the recorder, so a pending count-in kept running and began recording after the stop | `TransportController.stopAll` now ends a pending count-in or an in-flight take too |
+| REC didn't restart the count-in | that same pending count-in left `countingIn` set, so `start()` skipped its count-in branch and fell through to `begin()` | `start()` re-arms a running count from bar 1, and refuses while a take is rolling |
+| No way to place playback | there was no seek control anywhere — the bar ruler had no gesture | dragging the ruler seeks; see §8.4 `U2` |
+
+The third is a new feature rather than a repair, and the only one of the three still carrying real
+risk: the seek schedules the buffer's **tail as a copy**, because `AVAudioPlayerNode` starts a
+*buffer* at frame 0 and `scheduleSegment` — the only partway-in API — takes a file, which would drop
+the anti-click fades `loadTrackBuffer` bakes in (`TransportController.swift:243`). Whether that join
+is click-free is a listening test.
 
 ## 8.8 Section 2 rebaseline
 
