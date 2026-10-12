@@ -8,7 +8,7 @@ shared audio core.
 - **UI:** SwiftUI (separate macOS and iPad view layers)
 - **Audio:** AVFoundation (`AVAudioEngine`) + CoreAudio HAL / `AVAudioSession` (device layer) +
   CoreMIDI (track follow)
-- **Source:** 25 files in `Sources/`, ~8,530 lines (shared core + both UIs)
+- **Source:** 25 files in `Sources/`, 8,793 lines (shared core + both UIs)
 - **Build paths:** `package.sh` (macOS, head-less `swiftc`), `Tape08/` (macOS Xcode project),
   `Tape08iPad/` (iPad Xcode project)
 
@@ -48,14 +48,25 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
 
 ### 1.4 Recording
 - Captures the **dry** (pre-FX) signal to a WAV under the save location.
-- Optional **count-in** (0 / 1 / 2 / 4 bars) before recording starts. Pressing REC again re-arms it
-  from bar 1; STOP aborts it.
+- Optional **count-in** (0 / 1 / 2 / 4 bars) before recording starts. The count **rides the click
+  grid** rather than a timer: the metronome reports each beat on its own sample clock, the count
+  starts on the next bar line — so bar 1 of the count carries the accent — and recording begins on
+  the downbeat that ends it. Pressing REC again re-targets the next bar line without restarting the
+  metronome node, so the clicks stay in phase with a track already looping; STOP aborts it. With the
+  metronome switched off there is no grid to observe and the count falls back to the wall clock
+  (silent either way).
 - Elapsed-time display; on stop the take becomes a new clip on the selected track.
-- Recording/f FX: takes are dry by design; effects are heard live but not printed.
+- Recording vs FX: takes are dry by design; effects are heard live but not printed.
 
 ### 1.5 Metronome & tempo
 - Sample-accurate click scheduling (queued ~2 s ahead by frame, not by timer).
 - Accent on every 4th beat; independent click volume; enable toggle.
+- **Tempo changes keep the phase**: the queue is flushed and the node restarted (nothing can
+  re-space a queued buffer), but the elapsed fraction of the beat in progress is carried across, and
+  the bar count continues — so dropping the BPM mid-play slows the clicks without restarting the bar
+  under you.
+- Beats are also **observable**: while something is listening (today only the count-in) the
+  controller records each beat's index and frame and reports it as the player's clock reaches it.
 - **Tap tempo** (8-tap average, 40–300 BPM clamp); manual ± 1 BPM.
 
 ### 1.6 Clip editing & export
@@ -111,6 +122,11 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
 | F | Toggle playhead follow | ⌘+ / ⌘− | Timeline zoom in / out |
 | Return | Stop all | ⌘1–⌘8 | Select take N on that track |
 
+Bindings are matched by the **printed character** (`charactersIgnoringModifiers`, lowercased), not
+by the key's physical position — so they follow the user's layout rather than ANSI. Main Return and
+keypad Enter are the same binding, and the zoom keys accept `=`/`+` and `-`/`_` so they don't assume
+the unshifted glyph.
+
 ---
 
 ## 2. Architecture
@@ -121,11 +137,10 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
 @main MonitorApp (App.swift)
  └─ ContentView                      @StateObject AudioManager
      ├─ TopBar                        brand · view tabs · status · device pickers · FX/Settings
-     ├─ HStack
-     │   ├─ SettingsPanel   (optional, w 260)
-     │   ├─ SideEffectsPanelView (optional, w 400)   ← FX chain editor
+     ├─ HStack  (.padding(.leading, openDrawerWidth), with the drawer as a leading overlay)
+     │   ├─ SettingsPanel (w 260) · SideEffectsPanelView (w 400)   ← at most one, over the gap
      │   └─ ArrangeView  ── ArrangeHeadUnit + LoopGridView (+ TrimEditorView)
-     │       or MonitorView
+     │        or MonitorView
      └─ TransportBar                  transport · tempo · count-in · IN/OUT · limiter
       · KeyboardShortcutMonitor (NSEvent local monitor)
       · AppDelegate (quit on last window close)
@@ -133,6 +148,16 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
 
 `KeyboardShortcutMonitor` installs a local key-down monitor (ignored while a text field is focused)
 and dispatches to `AudioManager` on the main queue.
+
+**Drawers.** The settings and FX panels float as overlays on the workspace rather than sitting in
+the `HStack` — they used to squeeze the timeline into unreadability. So they don't take width, the
+`HStack` takes a `.padding(.leading, audio.openDrawerWidth)` inset instead: opening a drawer pushes
+the tape (and the monitor view) right by the drawer's own width, and the drawer floats over the
+space it vacated. Each panel publishes its width in `Theme` and uses that same constant for its
+`frame`, so the inset can't drift from the panel. The two are **mutually exclusive** — opening one
+closes the other, since 260 + 400 of a 1280 pt minimum window would leave nothing. The window's
+minimum width is 1280 for the same reason: with a drawer open the lane region still has to hold the
+fixed right-hand control column.
 
 ### 2.2 The facade pattern (the core design)
 
@@ -163,7 +188,7 @@ Metronome  Device   EffectsChain Transport Meter Recording Project Engine
 | `EffectsChainController` | instantiated chain nodes, preset dir | `liveChain`, `presetNames`, `showPresetSave`, `presetSaveName`, `status` |
 | `TransportController` | player/mixer nodes, decoded buffers, play generations & seek offsets, undo/redo stacks | `tracks`, `isPlaying`, `seekFraction`, `projectDirty`, trim state, `bounceStatus` |
 | `MeterController` | locked meter snapshot, display timer, taps, smoothing state | `live.meters.*`, `live.trackMeters.levels`, `live.playhead.trackProgress` |
-| `RecordingController` | `AVAudioFile` handle, dry tap, count-in/take timers | `isRecording`, `countingIn`, `recordingDuration`, `recordings`, `tracks` |
+| `RecordingController` | `AVAudioFile` handle, dry tap, capture ring, count-in state | `isRecording`, `countingIn`, `recordingDuration`, `tracks` |
 | `ProjectController` | — | `projectURL`, `projectName`, `projectDirty`, `status` |
 | `EngineController` | `AVAudioEngine`, every node it builds, async-insert machinery | `isMonitoring`, `status`, `sampleRateString` |
 
@@ -236,13 +261,16 @@ EffectAudioUnit : AUAudioUnit  ── hosts one kernel as an in-process AU; its
 
 | Thread | Responsibilities |
 |--------|------------------|
-| **Main** | All SwiftUI, all controller logic, engine build/teardown, **all `@Published` writes**, the 60 Hz meter/display timer, `saveLocation`/panels |
-| **Render (audio)** | Meter taps (RMS into the locked snapshot), recording tap (`AVAudioFile.write`), and each `EffectAudioUnit.internalRenderBlock` → `kernel.process` |
-| **Background (`.userInitiated`)** | Track buffer decode (`TransportController.loadTrackBuffer`), project clip peak decode (`ProjectController.performLoad`) |
+| **Main** | All SwiftUI, all controller logic, engine build/teardown, **all `@Published` writes**, the 60 Hz meter/display timer, the 10 ms beat-observation poll, `saveLocation`/panels |
+| **Render (audio)** | Meter taps (RMS into the locked snapshot), the dry-recording tap (copies frames into a ring only — no I/O, no allocation), and each `EffectAudioUnit.internalRenderBlock` → `kernel.process` |
+| **Background (`.userInitiated`)** | Track buffer decode (`TransportController.loadTrackBuffer`), project clip peak decode (`ProjectController.performLoad`), the recording ring's disk drain, and every edit/export path routed through `AudioManager.runOffMain(busy:work:apply:)` |
 
-Synchronisation today: one `OSAllocatedUnfairLock`-guarded meter snapshot (`MeterController`).
-Everything else that crosses threads — kernel parameters, the pending-instantiation statics — is
-**unsynchronised** (called out in the review).
+Synchronisation: an `OSAllocatedUnfairLock`-guarded meter snapshot (`MeterController`), a lock
+around the recording ring and file handle (`RecordingController`), and a `renderLock` inside
+`EffectAudioUnit` so a parameter write from main cannot tear a value the render block is reading
+(`Support.swift`'s `UnfairLock`). Kernel instantiation is serialised process-wide by
+`pumpKernelQueue`, with an epoch discarding completions from a torn-down graph. Remaining
+audio-thread note: the recording ring uses a lock rather than being truly lock-free.
 
 ### 2.6 Persistence & files on disk
 
@@ -281,10 +309,12 @@ the package so a project is portable. On iPad the container is exposed to the Fi
 ### 2.7 Data model (`Models.swift`)
 
 - `AudioDevice` — id + name.
-- `TrackClip` — url, duration, peaks, fade in/out (fades currently unused — see review).
-- `TrackInfo` — id, clips, volume, pan, muted, solo, isPlaying, loopProgress.
-- `Recording` — a saved take's metadata (currently unread — see review).
+- `TrackClip` — url, duration, peaks, fade in/out (fades are applied at schedule time and in
+  mixdown, so playback and export agree).
+- `TrackInfo` — id, clips, volume, pan, muted, solo, isPlaying.
 - `ProjectClipData` / `ProjectTrackData` / `ProjectChainSlotData` / `ProjectData` — persistence DTOs.
+  The old `Recording` take-metadata struct (written, never read by any view) was deleted in the
+  2026-10-12 dead-code sweep.
 
 ### 2.8 Platform seam (macOS / iPad)
 
@@ -353,27 +383,27 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 
 | File | Lines | Platform | Responsibility |
 |------|------:|----------|----------------|
-| `Views.swift` | 2519 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
-| `TransportController.swift` | 1194 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
+| `Views.swift` | 2529 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
+| `TransportController.swift` | 1193 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
 | `EffectsKernels.swift` | 763 | shared | Custom DSP kernels |
-| `EffectsCore.swift` | 503 | shared | Module/registry/chain/AU-host core + Apple module defs |
-| `Views_iOS.swift` | 446 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
-| `AudioManager.swift` | 358 | shared | The `ObservableObject` facade: published state + forwarders |
-| `EngineController.swift` | 326 | shared | `AVAudioEngine` graph spine + async kernel insert |
-| `ProjectController.swift` | 281 | shared (`[mac]` panels) | `.xyproj` save/load |
-| `RecordingController.swift` | 286 | shared | Count-in + dry capture |
-| `App.swift` | 248 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
+| `EffectsCore.swift` | 480 | shared | Module/registry/chain/AU-host core + Apple module defs |
+| `Views_iOS.swift` | 463 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
+| `AudioManager.swift` | 381 | shared | The `ObservableObject` facade: published state + forwarders |
+| `EngineController.swift` | 339 | shared | `AVAudioEngine` graph spine + async kernel insert |
+| `RecordingController.swift` | 332 | shared | Count-in (click-grid aligned) + dry capture |
+| `MetronomeController.swift` | 324 | shared | Click scheduling, beat observation + tap tempo |
+| `ProjectController.swift` | 318 | shared (`[mac]` panels) | `.xyproj` save/load |
+| `App.swift` | 272 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
 | `CoreAudioDevices.swift` | 217 | `[mac]` | CoreAudio HAL enumeration/selection helpers + the aggregate device for clock-master I/O |
-| `MetronomeController.swift` | 198 | shared | Click scheduling + tap tempo |
 | `EffectsChainController.swift` | 193 | shared | Chain mutations + presets |
 | `MeterController.swift` | 168 | shared | Meter taps + display smoothing |
-| `DeviceController.swift` | 132 | shared | Device discovery + MIDI track follow (delegates to `io`) |
-| `Models.swift` | 131 | shared | Value types + `Codable` DTOs + `DeviceID` |
+| `DeviceController.swift` | 137 | shared | Device discovery + MIDI track follow (delegates to `io`) |
 | `DeviceIO_iOS.swift` | 104 | `[iOS]` | `AVAudioSession` provider + route/interruption observers |
+| `Models.swift` | 103 | shared | Value types + `Codable` DTOs + `DeviceID` |
 | `Support.swift` | 97 | shared | `UnfairLock`, `computePeaks`, unique filename stems, off-main helper |
 | `DeviceIO_macOS.swift` | 87 | `[mac]` | `CoreAudioDeviceProvider` |
 | `SaveLocation.swift` | 76 | `[mac]` | Sandboxed save-folder: security-scoped bookmark round-trip, first-run prompt state |
-| `Theme.swift` | 49 | shared | Palette + layout constants |
+| `Theme.swift` | 63 | shared | Palette + layout constants (drawer widths, control-column width) |
 | `AudioDeviceProviding.swift` | 47 | shared | The device-I/O protocol + `DeviceChange` |
 | `PlatformPaths.swift` | 46 | shared | `tracksRoot` / `presetsDir` / `initialSaveLocation` per platform |
 | `LiveState.swift` | 45 | shared | 60 Hz display state: the `MeterState` / `TrackMeterState` / `PlayheadState` publishers kept out of `@Published` |
@@ -383,15 +413,17 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 
 ## 5. Known limitations & risks
 
-Full detail and severities are in [to_fix.md §8](to_fix.md). Highest-impact **open** items:
+Full detail and severities are in [to_fix.md §8](to_fix.md). Highest-impact **open** items — the
+deferred list is down to two, both held back deliberately because each rewrites the audio path and
+the work they would build on has not been on hardware yet:
 
-- **UI-1** — the tape timeline clips when the settings + FX panels are open (fixed-width panels).
-- **U1** — count-in is timed by a `Timer`, not aligned to the metronome grid.
 - **U2** — only a track's **last** clip is decoded and played, so trim/duplicate/split on an earlier
-  take are silent. Since 2026-10-12 a ruler drag parks a playhead that a *stopped* take can be split
-  at, but it is placed on the ruler's span, not inside a lane, and is per-track-normalised.
-- **H5** — a multichannel input interface meets a stereo graph on connect (no explicit downmix).
-- **H6** — project load builds file paths from `project.json` without sanitising them.
+  take are silent, and takes don't layer (the intended semantic is overdub). Since 2026-10-12 a ruler
+  drag parks a playhead that a *stopped* take can be split at, but it is placed on the ruler's span,
+  not inside a lane, and is per-track-normalised.
+- **P2** — a chain edit rebuilds the whole engine (`rebuildChain`), which is expensive, drops track
+  playback, and re-enters the async-insert machinery. Kernel nodes are also spliced in before
+  `liveMix` regardless of their slot position, so they always end up last in the chain.
 
 Resolved on 2026-10-11 (see `to_fix.md` §8.9): **C1** (param/render race), **C2** (async-insert
 epoch), **C3** (render-thread file writes), **C5** (double-engine leak on start-while-monitoring).
@@ -419,6 +451,21 @@ not the recorder, so a pending count-in outlived the stop and began recording af
 **REC** therefore found `countingIn` still set and fell straight through its count-in branch; and
 there was **no seek control at all**. See `to_fix.md` §8.7 for the fix table — the seek is new
 behaviour rather than a repair and is the one item still carrying unverified risk.
+
+Also resolved on 2026-10-12, from the deferred list (compile/link verified; the audible and
+concurrent behaviour still needs a hardware pass — see `to_fix.md` §8.6 for the checks each one
+needs): **U1** (the count-in rides the click grid rather than a `Timer`, so the count's bar 1 carries
+the accent and the take starts on the downbeat that ends it; a re-press re-targets the next bar line
+without restarting the metronome node), **U3** (MIDI track-follow requires note-on with velocity > 0,
+so note-offs, CC and aftertouch no longer fight the user's track clicks), **U4** (a tempo change
+carries the beat phase across the node restart and continues the bar), **H5** (a >2-channel input is
+connected through a stereo format — same rate, so the mixer inserts a channel map rather than a
+resample — and the status line names the channel count), **H6** (manifest paths are resolved inside
+the package, rejecting absolute paths, `.`/`..` components and symlink escapes, with rejections
+counted in the load status), **UI-1** (drawers push the workspace right and are mutually exclusive),
+**UI-5** (hit targets grown to 44 pt where the layout allows — one deliberate exception, the grid's
+zoom/follow trio, is 44 × 18 because a taller target has nowhere to go) and **CL-1** (the dead-code
+sweep, plus keyboard bindings matched by printed character rather than key position).
 
 Stage 0d's clock-master change for aggregate I/O has **not** been run on hardware.
 

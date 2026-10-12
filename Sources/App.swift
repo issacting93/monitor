@@ -257,8 +257,9 @@ struct MonitorApp: App {
             ContentView()
                 // 1280 rather than 1060: with the widest drawer open the workspace is
                 // pushed right by 400 pt, and the track-header column (200) plus the
-                // inspector column (410) and their gutters have to survive that before
-                // the lane region gets anything. At 1060 the lanes fell to their floor.
+                // control column (`Theme.controlsColumnWidth`, 460) and their gutters
+                // have to survive that before the lane region gets anything. At 1060 the
+                // lanes fell to their floor.
                 .frame(minWidth: 1280, minHeight: 720)
                 .background(Theme.bg)
         }
