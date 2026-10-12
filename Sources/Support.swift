@@ -24,6 +24,25 @@ let timestampFmt: DateFormatter = {
     let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd_HH-mm-ss"; return f
 }()
 
+// Pure: applies an anti-click fade-in/out (seconds) to a decoded float buffer in
+// place. Each ramp is capped at half the clip so a short clip can't ramp up and
+// straight back down. No-op when the fade is non-positive or the buffer is empty.
+// Free (no instance state) so it can run on the background decode queue.
+func applyClipFades(_ buffer: AVAudioPCMBuffer, fadeIn: Double, fadeOut: Double) {
+    guard let data = buffer.floatChannelData else { return }
+    let n = Int(buffer.frameLength)
+    let ch = Int(buffer.format.channelCount)
+    let sr = buffer.format.sampleRate
+    guard n > 0, ch > 0, sr > 0 else { return }
+    let inN  = min(Int(fadeIn  * sr), n / 2)
+    let outN = min(Int(fadeOut * sr), n / 2)
+    for c in 0..<ch {
+        let p = data[c]
+        for i in 0..<inN  { p[i]     *= Float(i) / Float(inN) }   // 0 → 1 from the start
+        for i in 0..<outN { p[n-1-i] *= Float(i) / Float(outN) }  // 0 → 1 back from the end
+    }
+}
+
 // Pure: reads `url` and returns `count` peak buckets. Free (no instance state)
 // so it can be called from a background queue during project load.
 func computePeaks(url: URL, count: Int) -> [Double] {

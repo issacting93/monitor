@@ -527,6 +527,9 @@ final class TransportController {
             let frames = AVAudioFrameCount(file.length)
             guard let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { continue }
             do { try file.read(into: buf) } catch { continue }
+            // Fade the clip's own ends before mixing. A track shorter than the mix is
+            // loop-filled in the mix loop below, so its fade repeats each pass.
+            applyClipFades(buf, fadeIn: clip.fadeIn, fadeOut: clip.fadeOut)
             sources.append((buf, Float(t.volume), Float(t.pan)))
         }
         guard !sources.isEmpty else { manager.status = "No audible tracks to bounce"; return }
@@ -639,12 +642,17 @@ final class TransportController {
             return
         }
         let url = lastClip.url
+        let fadeIn = lastClip.fadeIn
+        let fadeOut = lastClip.fadeOut
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var loaded: AVAudioPCMBuffer?
             if let file = try? AVAudioFile(forReading: url) {
                 let frames = AVAudioFrameCount(file.length)
                 if let buffer = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) {
                     try? file.read(into: buffer)
+                    // Bake the clip's anti-click fades in once, so playback and loop
+                    // re-scheduling reuse a faded buffer (and the loop seam is clean).
+                    applyClipFades(buffer, fadeIn: fadeIn, fadeOut: fadeOut)
                     loaded = buffer
                 }
             }
