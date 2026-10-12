@@ -107,12 +107,20 @@ final class EngineController {
 
         let stereoFmt = AVAudioFormat(standardFormatWithSampleRate: hwFmt.sampleRate, channels: 2) ?? hwFmt
 
+        // Take a multichannel input down to stereo at the first connection. Everything
+        // downstream of mainMixer is stereo, and AVAudioEngine rejects a connection whose
+        // channel counts disagree, so a >2-channel interface used to fail outright here.
+        // The rate is the device's own, so the converter the mixer inserts is a channel
+        // map, not a resample. At two channels or fewer this *is* hwFmt — the connection
+        // is unchanged from before.
+        let inputConnectFmt = hwFmt.channelCount > 2 ? stereoFmt : hwFmt
+
         let dryTap  = AVAudioMixerNode()   // pre-FX tap point for dry recording
         let liveMix = AVAudioMixerNode()
         let master  = AVAudioMixerNode()
         eng.attach(dryTap); eng.attach(liveMix); eng.attach(master)
 
-        eng.connect(eng.inputNode,     to: eng.mainMixerNode, format: hwFmt)
+        eng.connect(eng.inputNode,     to: eng.mainMixerNode, format: inputConnectFmt)
         eng.mainMixerNode.outputVolume = Float(m.inputVolume)
 
         // Build chain from liveChain slots (Apple nodes only — kernels added async after start)
@@ -202,7 +210,12 @@ final class EngineController {
         m.metronome.attach(player: metPlayer, mixer: metMix, sampleRate: stereoFmt.sampleRate)
         m.isMonitoring = true
 
-        m.status = routingWarning ?? "\(inDev.name) → \(m.device.io.currentOutputName)"
+        // Say when the input is being folded down, so a multichannel interface is visible
+        // in the status line rather than something the user has to infer from the audio.
+        let inputLabel = hwFmt.channelCount > 2
+            ? "\(inDev.name) (\(hwFmt.channelCount) ch → stereo)"
+            : inDev.name
+        m.status = routingWarning ?? "\(inputLabel) → \(m.device.io.currentOutputName)"
         m.sampleRateString = "\(Int(hwFmt.sampleRate / 1000)) kHz · 24-bit · Stereo"
         m.meter.startDisplayTimer()
 
