@@ -261,7 +261,7 @@ final class RecordingController {
         }
     }
 
-    func stop() {
+    func stop(loopWhenFiled: Bool = false) {
         let m = manager
         // Cancel count-in if active
         if m.countingIn {
@@ -294,6 +294,10 @@ final class RecordingController {
 
         guard let u = saved else { return }
         let epoch = m.transport.editEpoch
+        // A take still being measured must not start a loop after the user has stopped
+        // the transport; STOP bumps this, and the filing below can land a full file read
+        // after the press.
+        let transportEpoch = m.transport.transportEpoch
 
         // Measuring the take means reading the whole file back. The frames are already
         // safe on disk at this point, so the wait costs nothing but a status line.
@@ -321,7 +325,15 @@ final class RecordingController {
             // Register only now that a clip references the file: pushUndo() above runs the
             // orphan sweep, so registering before the clip exists would delete the take.
             m.transport.registerSessionFile(u)
-            m.transport.loadTrackBuffer(trk)
+            // The take is on the track now, which is the only moment the loop can start:
+            // `startTrackLoop` reads the cached buffer, and that is still the previous
+            // take's until this decode lands — handing the player the old audio is the
+            // half of this bug a first take does not show.
+            m.transport.loadTrackBuffer(trk) { ok in
+                guard ok, loopWhenFiled,
+                      transportEpoch == m.transport.transportEpoch else { return }
+                m.transport.startTrackLoop(trk)
+            }
 
             let dest = "TRK \(String(format: "%02d", trk + 1))"
             m.status = dropped > 0

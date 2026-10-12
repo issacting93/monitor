@@ -335,7 +335,13 @@ class AudioManager: ObservableObject {
 
     func startRecording() { recorder.start() }
 
-    func stopRecording() { recorder.stop() }
+    /// Ends a take. `loopWhenFiled` starts the track looping once the take is actually on
+    /// it, which the call site cannot do: the clip is filed off-main, so at the moment REC
+    /// is pressed there is either no clip yet (a first take) or only the previous take's
+    /// buffer to hand the player.
+    func stopRecording(loopWhenFiled: Bool = false) {
+        recorder.stop(loopWhenFiled: loopWhenFiled)
+    }
 
     // MARK: - Timeline Zoom
 

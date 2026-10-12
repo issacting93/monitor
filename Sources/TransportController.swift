@@ -79,6 +79,11 @@ final class TransportController {
     // runs off-main, can apply the same guard.
     private(set) var editEpoch = 0
 
+    /// Bumped by an explicit STOP, so work already dispatched — a take being filed, whose
+    /// peak decode is a full read of the file — can tell that the transport it was going
+    /// to resume has since been stopped on purpose.
+    private(set) var transportEpoch = 0
+
     // Identifies the trim editor session an off-main apply belongs to. Bumped when the
     // editor opens *and* when it closes, so an apply that lands after the user cancelled
     // is dropped. The epoch can't do this job: cancel is not a wholesale clip-set change,
@@ -354,8 +359,10 @@ final class TransportController {
     func toggleTrackRecord(_ i: Int) {
         manager.selectedTrack = i
         if manager.isRecording {
-            manager.stopRecording()
-            startTrackLoop(i)
+            // The take is filed off-main, so there is no clip to loop yet — `startTrackLoop`
+            // here found an empty track and bailed, which is why a take you had just
+            // recorded never played back. The loop start rides the filing completion.
+            manager.stopRecording(loopWhenFiled: true)
         } else {
             // Covers the count-in case too: `start()` re-arms a running count at the next
             // bar line rather than dropping straight into recording. Aborting a count-in is
@@ -405,6 +412,9 @@ final class TransportController {
         // REC skip its count-in entirely.
         let wasRecording = manager.isRecording
         let wasCountingIn = manager.countingIn
+        // Before the take is filed: a stop is a stop, and a filing still in flight must
+        // not start looping a track the user has just silenced.
+        transportEpoch += 1
         if wasRecording || wasCountingIn { manager.stopRecording() }
         manager.metronome.stop()
         for i in 0..<manager.tracks.count {

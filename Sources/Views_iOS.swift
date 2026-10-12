@@ -300,7 +300,7 @@ struct IOSTransportBar: View {
 
             // Record (uses the transport's own path, not the per-track arm)
             Button {
-                if audio.isRecording { audio.stopRecording(); audio.startTrackLoop(audio.selectedTrack) }
+                if audio.isRecording { audio.stopRecording(loopWhenFiled: true) }
                 else { audio.startRecording() }
             } label: {
                 HStack(spacing: 8) {
