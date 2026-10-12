@@ -1,11 +1,11 @@
 # TAPE 08
 
-A macOS **USB-audio monitor, multitrack looper and effects rack** for the
-[Teenage Engineering OP-XY](https://teenage.engineering/) (works with any CoreAudio input, but the
-workflow is built around the OP-XY).
+A **USB-audio monitor, multitrack looper and effects rack** for the
+[Teenage Engineering OP-XY](https://teenage.engineering/) (works with any audio input, but the
+workflow is built around the OP-XY). Runs on **macOS** and **iPad**.
 
 Plug the OP-XY in over USB, monitor it with a live effect chain, loop-record takes onto an 8-track
-tape grid, and bounce a mixdown — all in one window with a retro hardware aesthetic.
+tape grid, and bounce a mixdown — with a retro hardware aesthetic.
 
 ![TAPE 08](UI%20Ideas/06-transport-header-reel-knobs.png)
 
@@ -13,11 +13,12 @@ tape grid, and bounce a mixdown — all in one window with a retro hardware aest
 
 ## Requirements
 
-- macOS **14.0** or later (arm64)
+- **macOS** 14.0 or later (arm64)
+- **iPad** running iPadOS 17.0 or later (iPad only), with the iOS platform installed in Xcode
 - An audio input device (the OP-XY appears as a USB audio device)
-- Xcode command-line tools (for `swiftc`) — full Xcode is recommended
+- Full Xcode (for the iPad target); `swiftc` from the command-line tools is enough for macOS
 
-## Build & run
+## Build & run — macOS
 
 ```bash
 # Build the app bundle (./Tape 08.app) and sign it ad-hoc
@@ -33,11 +34,23 @@ open "Tape 08.app"
 Prefer Xcode? Open `Tape08/Tape08.xcodeproj` and build the **Tape08** scheme. The project uses a
 synchronized folder group pointing at `../Sources`, so both builds compile the same files.
 
+## Build & run — iPad
+
+Open `Tape08iPad/Tape08iPad.xcodeproj` in Xcode, set your signing team, and run the **Tape08iPad**
+scheme on an iPad or the Simulator (if Xcode asks, install the iOS platform first). Bundle id
+`com.tape08.app.ipad`, deployment target iPadOS 17.0, iPad only.
+
+Both apps compile the **same** `Sources/` tree; the platform-specific code is selected with
+`#if os(macOS)` / `#if os(iOS)`.
+
 ### First run
 
-macOS will ask for **microphone access** — grant it (System Settings ▸ Privacy & Security ▸
-Microphone). Pick your OP-XY under **IN** in the top bar and your speakers/headphones under **OUT**.
-Use headphones if you monitor a built-in mic, or you'll get feedback.
+macOS (and iPadOS) will ask for **microphone access** — grant it.
+
+- **macOS**: pick your OP-XY under **IN** and your speakers/headphones under **OUT**. Use headphones
+  if you monitor a built-in mic, or you'll get feedback.
+- **iPad**: the output route is chosen by the system (no OUT picker — it shows a read-only label);
+  the OP-XY appears as an input automatically when connected over USB-C.
 
 ---
 
@@ -71,7 +84,29 @@ Use headphones if you monitor a built-in mic, or you'll get feedback.
 - **Timeline** — zoom (0.5×–4×), playhead follow, bar ruler, loop region.
 - **Projects** — `.xyproj` packages (manifest + copied audio) with save/save-as/open.
 
+## Platforms
+
+One shared audio core (`Sources/`) powers both apps. The iPad build is a first **MVP** — the rest is
+in progress.
+
+| Capability | macOS | iPad (MVP) |
+|---|---|---|
+| Live monitoring, meters, waveform, in/out gain | ✅ | ✅ |
+| 8-track loop record / play, mute / solo, volume | ✅ | ✅ |
+| 13-effect chain (add/remove/reorder/bypass, knobs) | ✅ | ✅ |
+| Metronome + tap tempo, undo / redo | ✅ | ✅ |
+| MIDI track-follow | ✅ | ✅ |
+| Trim / split / duplicate | ✅ | ⏸ deferred |
+| Project save / load, export, mixdown | ✅ | ⏸ deferred |
+| Output-device selection | ✅ picker | ➖ read-only label (iOS has no API) |
+| Keyboard shortcuts | ✅ | ➖ touch UI instead |
+
+Deferred features currently show a status message on iPad rather than a file panel. See
+[ARCHITECTURE.md](ARCHITECTURE.md) for how the platform seam works.
+
 ## Keyboard shortcuts
+
+*(macOS — the iPad build is touch-only.)*
 
 | Key | Action | Key | Action |
 |-----|--------|-----|--------|
@@ -86,10 +121,19 @@ Use headphones if you monitor a built-in mic, or you'll get feedback.
 
 ## Files it writes
 
+**macOS**
+
 ```
-~/Desktop/OP-XY Monitor/Tracks/Track NN/   recorded takes (default; change in Settings)
+~/Desktop/OP-XY Monitor/Tracks/Track NN/        recorded takes (default; change in Settings)
 ~/Library/Application Support/Tape08/Presets/   effect-chain presets (JSON)
-<project>.xyproj/                          project package (project.json + Audio/)
+<project>.xyproj/                               project package (project.json + Audio/)
+```
+
+**iPad** (inside the app's container; visible in the Files app via `UIFileSharingEnabled`)
+
+```
+Documents/OP-XY Monitor/Tracks/Track NN/        recorded takes
+Library/Application Support/Tape08/Presets/     effect-chain presets (JSON)
 ```
 
 ---
@@ -97,9 +141,10 @@ Use headphones if you monitor a built-in mic, or you'll get feedback.
 ## Repository layout
 
 ```
-Sources/                     all Swift source (17 files) — the app
-package.sh                   builds and signs "Tape 08.app"
-Tape08/                      Xcode project (Tape08.xcodeproj)
+Sources/                     all Swift source (23 files) — shared core + both UIs
+package.sh                   builds and signs the macOS "Tape 08.app"
+Tape08/                      macOS Xcode project (Tape08.xcodeproj)
+Tape08iPad/                  iPad Xcode project (Tape08iPad.xcodeproj) + Info.plist
 UI Ideas/                    design references / screenshots
 archive/                     earlier prototypes (not built)
 deep-claude/                 vendored tooling (not part of the app)

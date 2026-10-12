@@ -1,13 +1,16 @@
 # TAPE 08 — Functionality & System Architecture
 
-A single-window macOS app for monitoring, recording and looping the **Teenage Engineering OP-XY**
-over USB audio, with a multitrack tape-style looper and a modular effects chain.
+An app for monitoring, recording and looping the **Teenage Engineering OP-XY** over USB audio, with a
+multitrack tape-style looper and a modular effects chain. Runs on **macOS** and **iPad** from one
+shared audio core.
 
-- **Platform:** macOS 14.0+, arm64
-- **UI:** SwiftUI
-- **Audio:** AVFoundation (`AVAudioEngine`) + CoreAudio (device layer) + CoreMIDI (track follow)
-- **Source:** 17 files in `Sources/`, ~6,230 lines
-- **Two build paths:** `package.sh` (head-less `swiftc`) and the Xcode project `Tape08/`
+- **Platforms:** macOS 14.0+ (arm64); iPadOS 17.0+ (iPad only)
+- **UI:** SwiftUI (separate macOS and iPad view layers)
+- **Audio:** AVFoundation (`AVAudioEngine`) + CoreAudio HAL / `AVAudioSession` (device layer) +
+  CoreMIDI (track follow)
+- **Source:** 23 files in `Sources/`, ~7,200 lines (shared core + both UIs)
+- **Build paths:** `package.sh` (macOS, head-less `swiftc`), `Tape08/` (macOS Xcode project),
+  `Tape08iPad/` (iPad Xcode project)
 
 This document describes *what the app does* and *how it is built*, as it exists today. The
 developer-facing "how do I build/run it" lives in [README.md](README.md); review findings and
@@ -180,6 +183,11 @@ inputNode ──▶ mainMixer (inputVolume) ──▶ dryTap ──▶ [Apple ch
   pre-gain 0, 12 ms attack, 50 ms decay) sits before the output.
 - Per-track `playerN → trackMixN → master` provide per-track volume/pan/metering/playback.
 - The metronome has its own `metPlayer → metMix → master`.
+- **Input device**: on macOS the engine's input AUHAL is pinned to the selected device
+  (`AudioDeviceProviding.applyInputDevice`). On iPad the `AVAudioSession` is configured + activated
+  **first** (`prepareForEngineStart()`, at the top of `start()`), then the session's preferred input
+  is set — the session must be active before `inputNode.inputFormat` is read, or the format is
+  0 Hz / 0 channels.
 
 **Why the two-phase chain build.** Apple effect nodes (`makeAudioNode`) are attached synchronously
 during graph construction. Custom-kernel modules cannot be: `AVAudioUnit.instantiate` is
@@ -230,19 +238,25 @@ Everything else that crosses threads — kernel parameters, the pending-instanti
 
 ### 2.6 Persistence & files on disk
 
+Roots come from `PlatformPaths` (`tracksRoot`, `presetsDir`):
+
 ```
-saveLocation (default: ~/Desktop/OP-XY Monitor/Tracks)
- └─ Track NN/                take_YYYY-MM-DD_HH-mm-ss.wav, trim_…, split_A/B_…, <imported>
+tracksRoot                      macOS: ~/Desktop/OP-XY Monitor/Tracks
+ └─ Track NN/                   iOS:  <container>/Documents/OP-XY Monitor/Tracks
+      take_YYYY-MM-DD_HH-mm-ss.wav, trim_…, split_A/B_…, <imported>
 
-~/Library/Application Support/Tape08/Presets       *.json (chain presets)
+presetsDir                      macOS: ~/Library/Application Support/Tape08/Presets
+                                iOS:  <container>/Library/Application Support/Tape08/Presets
+      *.json (chain presets)
 
-<project>.xyproj/                                  (a directory package)
- ├─ project.json                                   ProjectData (Codable)
- └─ Audio/Track NN/<clip>.wav                      copies of referenced clips
+<project>.xyproj/               (a directory package — macOS only for now)
+ ├─ project.json                ProjectData (Codable)
+ └─ Audio/Track NN/<clip>.wav   copies of referenced clips
 ```
 
 `ProjectData` (`Models.swift`) is the versioned manifest (v1). Clip paths are stored **relative** to
-the package so a project is portable.
+the package so a project is portable. On iPad the container is exposed to the Files app
+(`UIFileSharingEnabled` + `LSSupportsOpeningDocumentsInPlace`).
 
 ### 2.7 Data model (`Models.swift`)
 
@@ -252,44 +266,81 @@ the package so a project is portable.
 - `Recording` — a saved take's metadata (currently unread — see review).
 - `ProjectClipData` / `ProjectTrackData` / `ProjectChainSlotData` / `ProjectData` — persistence DTOs.
 
+### 2.8 Platform seam (macOS / iPad)
+
+Everything platform-specific sits behind `#if os(...)` so the same `Sources/` compiles for both:
+
+- **`AudioDeviceProviding`** (`AudioDeviceProviding.swift`) — the device-I/O interface:
+  `prepareForEngineStart()`, `loadDevices()`, `applyInputDevice(_:to:)`, `currentOutputName`,
+  `outputSelectionSupported`, and `startObserving(_:)` (emits `DeviceChange`). Two implementations:
+  **`CoreAudioDeviceProvider`** (`DeviceIO_macOS.swift`, wrapping the `CoreAudioDevices` HAL helpers)
+  and **`AVAudioSessionDeviceProvider`** (`DeviceIO_iOS.swift`, wrapping `AVAudioSession` plus
+  route-change / interruption / media-services notifications). `DeviceController` holds the correct
+  one in `io`; `EngineController` and the views reach it via `manager.device.io`.
+- **`DeviceID`** (`Models.swift`) — `AudioDeviceID` on macOS, a synthetic `UInt32` (index into
+  `availableInputs`) on iPad, so the rest of the code stays agnostic.
+- **`PlatformPaths`** (`PlatformPaths.swift`) — `tracksRoot` / `presetsDir` (Desktop vs Documents /
+  Application Support).
+- **Entry + UI**: `App.swift` and `Views.swift` are `#if os(macOS)`; `App_iOS.swift` and
+  `Views_iOS.swift` are `#if os(iOS)`. The shared view *primitives* (`ArcKnob`, `TrackFader`,
+  `TempoControl`, `VerticalMeter`, `DotGridBackground`, `RetroButtonStyle`) stay unguarded in
+  `Views.swift` and are reused by both UIs.
+- **Deferred on iPad** (guarded macOS features that degrade to a status no-op): trim / split /
+  duplicate, project save/load, export, mixdown, and output-device selection (iOS exposes no such
+  API).
+
 ---
 
 ## 3. Build system
 
-Two equivalent builds share the same `Sources/`:
+All three builds compile the **same** `Sources/` tree; the `#if os(...)` guards select what each
+platform sees.
 
 1. **`package.sh`** — compiles `Sources/*.swift` with `swiftc -O -parse-as-library` for
    `arm64-apple-macosx14.0`, then assembles `Tape 08.app` (Info.plist, generated `.icns` icon, and
-   an `audio-input` entitlement) and ad-hoc codesigns it. This is the everyday build.
-2. **`Tape08/Tape08.xcodeproj`** — uses an `PBXFileSystemSynchronizedRootGroup` pointed at
-   `../Sources`, so the two builds track the same files; the scheme is `Tape08`.
+   an `audio-input` entitlement) and ad-hoc codesigns it. This is the everyday macOS build.
+2. **`Tape08/Tape08.xcodeproj`** — the macOS Xcode project (`PBXFileSystemSynchronizedRootGroup`
+   pointed at `../Sources`); scheme `Tape08`.
+3. **`Tape08iPad/Tape08iPad.xcodeproj`** — the iPad Xcode project (its own synchronized group at
+   `../Sources`); scheme `Tape08iPad`, `TARGETED_DEVICE_FAMILY=2`, iOS 17.0, bundle id
+   `com.tape08.app.ipad`, with `Tape08iPad/Info.plist` (mic usage, `UIBackgroundModes=[audio]`,
+   Files sharing).
 
-Robustness checks used during the refactor: `swiftc -typecheck -parse-as-library Sources/*.swift`
-and `xcodebuild … -scheme Tape08 build`.
+Checks used throughout: `swiftc -typecheck -parse-as-library Sources/*.swift` for both
+`arm64-apple-macosx14.0` and `arm64-apple-ios17.0-simulator`, plus `xcodebuild … -scheme Tape08
+build` (macOS). Building the iPad target needs the iOS platform installed in Xcode.
 
 ---
 
 ## 4. File map
 
-| File | Lines | Responsibility |
-|------|------:|----------------|
-| `App.swift` | 227 | Entry point, `ContentView`, keyboard monitor, `AppDelegate` |
-| `AudioManager.swift` | 273 | The `ObservableObject` facade: published state + forwarders |
-| `Views.swift` | 2266 | Every SwiftUI view |
-| `EffectsKernels.swift` | 763 | 11 custom DSP kernels |
-| `TransportController.swift` | 624 | Playback, undo/redo, clip editing, mixdown |
-| `EffectsCore.swift` | 493 | Module/registry/chain/AU-host core + Apple module defs |
-| `EngineController.swift` | 262 | `AVAudioEngine` graph spine + async kernel insert |
-| `ProjectController.swift` | 255 | `.xyproj` save/load |
-| `MetronomeController.swift` | 198 | Click scheduling + tap tempo |
-| `EffectsChainController.swift` | 195 | Chain mutations + presets |
-| `MeterController.swift` | 163 | Meter taps + display smoothing |
-| `RecordingController.swift` | 128 | Count-in + dry capture |
-| `Models.swift` | 123 | Value types + `Codable` DTOs |
-| `DeviceController.swift` | 110 | Device discovery + MIDI track follow |
-| `CoreAudioDevices.swift` | 69 | CoreAudio enumeration/selection helpers |
-| `Theme.swift` | 49 | Palette + layout constants |
-| `Support.swift` | 35 | `computePeaks`, timestamp formatter |
+23 files. `[shared]` compiles on both platforms; `[mac]`/`[iOS]` are guarded.
+
+| File | Lines | Platform | Responsibility |
+|------|------:|----------|----------------|
+| `Views.swift` | 2278 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
+| `Views_iOS.swift` | 444 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
+| `EffectsKernels.swift` | 763 | shared | Custom DSP kernels |
+| `TransportController.swift` | 638 | shared | Playback, undo/redo, clip editing, mixdown |
+| `EffectsCore.swift` | 503 | shared | Module/registry/chain/AU-host core + Apple module defs |
+| `EngineController.swift` | 318 | shared | `AVAudioEngine` graph spine + async kernel insert |
+| `AudioManager.swift` | 269 | shared | The `ObservableObject` facade: published state + forwarders |
+| `ProjectController.swift` | 265 | shared (`[mac]` panels) | `.xyproj` save/load |
+| `RecordingController.swift` | 246 | shared | Count-in + dry capture |
+| `App.swift` | 229 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
+| `MetronomeController.swift` | 198 | shared | Click scheduling + tap tempo |
+| `EffectsChainController.swift` | 190 | shared | Chain mutations + presets |
+| `MeterController.swift` | 163 | shared | Meter taps + display smoothing |
+| `Models.swift` | 132 | shared | Value types + `Codable` DTOs + `DeviceID` |
+| `DeviceController.swift` | 131 | shared | Device discovery + MIDI track follow (delegates to `io`) |
+| `DeviceIO_iOS.swift` | 100 | `[iOS]` | `AVAudioSession` provider + route/interruption observers |
+| `CoreAudioDevices.swift` | 71 | `[mac]` | CoreAudio HAL enumeration/selection helpers |
+| `Theme.swift` | 49 | shared | Palette + layout constants |
+| `Support.swift` | 48 | shared | `UnfairLock`, `computePeaks`, timestamp formatter |
+| `DeviceIO_macOS.swift` | 45 | `[mac]` | `CoreAudioDeviceProvider` |
+| `AudioDeviceProviding.swift` | 39 | shared | The device-I/O protocol + `DeviceChange` |
+| `PlatformPaths.swift` | 35 | shared | `tracksRoot` / `presetsDir` per platform |
+| `App_iOS.swift` | 16 | `[iOS]` | iPad `@main` entry |
 
 ---
 
@@ -308,6 +359,11 @@ Resolved on 2026-10-11 (see `to_fix.md` §8.9): **C1** (param/render race), **C2
 epoch), **C3** (render-thread file writes), **C5** (double-engine leak on start-while-monitoring).
 Remaining audio-thread note: the recording tap copies into a lock-guarded ring rather than a truly
 lock-free one.
+
+**iPad MVP:** monitoring, metering, loop recording, the effect chain, metronome and undo/redo work;
+trim/split/duplicate, project save/load, export and mixdown are deferred (status no-op), and
+output-device selection is a read-only label. The shared core is verified by compile **and link**
+against the macOS and iOS SDKs, but the iPad app has **not** been run on hardware yet.
 
 ## 6. Glossary
 
