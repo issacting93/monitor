@@ -52,41 +52,54 @@ final class ProjectController {
 
     private func performSave(to packageURL: URL) {
         let m = manager
-        let fm = FileManager.default
 
-        // Create package directory
-        try? fm.createDirectory(at: packageURL, withIntermediateDirectories: true)
-
-        // Copy audio files into Audio/ subdirectory
-        for t in m.tracks {
-            guard !t.clips.isEmpty else { continue }
-            let trackAudioDir = packageURL.appendingPathComponent("Audio/Track \(t.id + 1)")
-            try? fm.createDirectory(at: trackAudioDir, withIntermediateDirectories: true)
-            for clip in t.clips {
-                let destFile = trackAudioDir.appendingPathComponent(clip.url.lastPathComponent)
-                if !fm.fileExists(atPath: destFile.path) {
-                    try? fm.copyItem(at: clip.url, to: destFile)
-                }
+        // Serialize on the main thread — it reads the live session — then hand the
+        // manifest and the list of files to copy to the background. Copying every clip
+        // is what makes a save slow, and a project can hold a lot of audio.
+        let data = buildProjectData()
+        let copies: [(src: URL, dest: URL)] = m.tracks.flatMap { t in
+            t.clips.map { clip in
+                (clip.url,
+                 packageURL.appendingPathComponent("Audio/Track \(t.id + 1)/\(clip.url.lastPathComponent)"))
             }
         }
 
-        // Serialize project data
-        let data = buildProjectData()
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        do {
-            let jsonData = try encoder.encode(data)
-            let jsonURL = packageURL.appendingPathComponent("project.json")
-            try jsonData.write(to: jsonURL)
-        } catch {
-            m.status = "Save error: \(error.localizedDescription)"
-            return
-        }
+        m.status = "Saving \(packageURL.lastPathComponent)…"
+        m.runOffMain(busy: "Saving project…") { () -> String? in
+            let fm = FileManager.default
 
-        m.projectURL = packageURL
-        m.projectName = packageURL.deletingPathExtension().lastPathComponent
-        m.projectDirty = false
-        m.status = "Saved \(m.projectName)"
+            // Create package directory
+            try? fm.createDirectory(at: packageURL, withIntermediateDirectories: true)
+
+            // Copy audio files into Audio/ subdirectory. The copies stay best-effort, as
+            // before: a clip that cannot be copied leaves the manifest describing it,
+            // which the load path already reports as a missing file.
+            for copy in copies {
+                try? fm.createDirectory(at: copy.dest.deletingLastPathComponent(),
+                                        withIntermediateDirectories: true)
+                if !fm.fileExists(atPath: copy.dest.path) {
+                    try? fm.copyItem(at: copy.src, to: copy.dest)
+                }
+            }
+
+            // Serialize project data
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            do {
+                let jsonData = try encoder.encode(data)
+                try jsonData.write(to: packageURL.appendingPathComponent("project.json"))
+                return nil
+            } catch {
+                return error.localizedDescription
+            }
+        } apply: { [weak self] error in
+            guard let self else { return }
+            if let error { self.manager.status = "Save error: \(error)"; return }
+            self.manager.projectURL = packageURL
+            self.manager.projectName = packageURL.deletingPathExtension().lastPathComponent
+            self.manager.projectDirty = false
+            self.manager.status = "Saved \(self.manager.projectName)"
+        }
     }
 
     private func buildProjectData() -> ProjectData {

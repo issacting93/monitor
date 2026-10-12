@@ -1358,7 +1358,7 @@ struct TransportBar: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(audio.bounceStatus != nil)
+                .disabled(audio.bounceStatus != nil || audio.busyEdit != nil)
             }
             // Shortcut hints
             HStack(spacing: 14) {
@@ -2127,7 +2127,7 @@ struct TrimEditorView: View {
                 .buttonStyle(.plain)
 
                 Button { audio.applyTrim() } label: {
-                    Text("APPLY")
+                    Text(audio.busyEdit == nil ? "APPLY" : "WORKING\u{2026}")
                         .font(.system(size: 10, weight: .black, design: .monospaced))
                         .tracking(2)
                         .foregroundColor(Theme.bg)
@@ -2136,6 +2136,7 @@ struct TrimEditorView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .disabled(audio.busyEdit != nil)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
         }
@@ -2233,6 +2234,7 @@ struct SettingsPanel: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .disabled(audio.busyEdit != nil)
                 }
 
                 Rectangle().fill(Theme.line).frame(height: 1)
@@ -2261,7 +2263,9 @@ struct SettingsPanel: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(!audio.tracks[audio.selectedTrack].isPlaying || audio.tracks[audio.selectedTrack].clips.isEmpty)
+                        .disabled(!audio.tracks[audio.selectedTrack].isPlaying
+                                  || audio.tracks[audio.selectedTrack].clips.isEmpty
+                                  || audio.busyEdit != nil)
 
                         Button { audio.duplicateClip(audio.selectedTrack) } label: {
                             HStack(spacing: 4) {
@@ -2279,7 +2283,7 @@ struct SettingsPanel: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(audio.tracks[audio.selectedTrack].clips.isEmpty)
+                        .disabled(audio.tracks[audio.selectedTrack].clips.isEmpty || audio.busyEdit != nil)
                     }
 
                     Button { audio.openTrimEditor(audio.selectedTrack) } label: {
@@ -2298,7 +2302,7 @@ struct SettingsPanel: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(audio.tracks[audio.selectedTrack].clips.isEmpty)
+                    .disabled(audio.tracks[audio.selectedTrack].clips.isEmpty || audio.busyEdit != nil)
 
                     Text("\u{2318}T SPLIT  \u{2318}D DUP")
                         .font(.system(size: 8, weight: .medium, design: .monospaced))

@@ -231,15 +231,27 @@ final class RecordingController {
         if !m.tracks.contains(where: { $0.isPlaying }) { m.metronome.stop() }
 
         guard let u = saved else { return }
-        let peaks = computePeaks(url: u, count: Theme.clipPeaks)
-        let clip  = TrackClip(url: u, duration: dur, peaks: peaks)
-        let rec   = Recording(url: u, duration: dur, trackIndex: trk)
+        let epoch = m.transport.editEpoch
 
-        let dest = "TRK \(String(format: "%02d", trk + 1))"
-        m.status = dropped > 0
-            ? "Saved \(u.lastPathComponent) → \(dest) (\(dropped) frames dropped)"
-            : "Saved \(u.lastPathComponent) → \(dest)"
-        DispatchQueue.main.async {
+        // Measuring the take means reading the whole file back. The frames are already
+        // safe on disk at this point, so the wait costs nothing but a status line.
+        m.status = "Saving \(u.lastPathComponent)…"
+        m.runOffMain(busy: "Saving take…") {
+            computePeaks(url: u, count: Theme.clipPeaks)
+        } apply: { [weak self] peaks in
+            guard let self else { return }
+            let m = self.manager
+            // An undo, or a project load, replaced the clip set while the take was being
+            // measured. Appending now would file it under a track the take was never
+            // recorded against — and the file is the user's performance, so it is left
+            // on disk and named rather than swept away.
+            guard epoch == m.transport.editEpoch else {
+                m.status = "Take left at \(u.lastPathComponent) — the session changed before it could be filed"
+                return
+            }
+            let clip = TrackClip(url: u, duration: dur, peaks: peaks)
+            let rec  = Recording(url: u, duration: dur, trackIndex: trk)
+
             m.transport.pushUndo()
             m.recordings.append(rec)
             m.tracks[trk].clips.append(clip)
@@ -247,6 +259,11 @@ final class RecordingController {
             // orphan sweep, so registering before the clip exists would delete the take.
             m.transport.registerSessionFile(u)
             m.transport.loadTrackBuffer(trk)
+
+            let dest = "TRK \(String(format: "%02d", trk + 1))"
+            m.status = dropped > 0
+                ? "Saved \(u.lastPathComponent) → \(dest) (\(dropped) frames dropped)"
+                : "Saved \(u.lastPathComponent) → \(dest)"
         }
     }
 }

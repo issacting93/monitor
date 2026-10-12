@@ -14,6 +14,27 @@ import AppKit
 import AVFoundation
 import UniformTypeIdentifiers
 
+/// One file an off-main clip edit produced, ready to be installed as a clip.
+private struct EditedClip {
+    let url: URL
+    let duration: Double
+    let peaks: [Double]
+}
+
+/// What an off-main clip edit produced. `failed` carries the status message to
+/// show, so the caller does not have to reconstruct why the edit did nothing.
+private enum EditOutcome {
+    case produced([EditedClip])   // one clip for trim/duplicate, two for split
+    case failed(String)
+}
+
+/// A finished mixdown, waiting only to be written to the file the user picks.
+private struct MixedDown {
+    let buffer: AVAudioPCMBuffer
+    let sampleRate: Double
+    let channels: Int
+}
+
 final class TransportController {
     private unowned let manager: AudioManager
 
@@ -49,9 +70,17 @@ final class TransportController {
     // dispatched before the change is dropped rather than landing on the new state.
     // Re-resolving by clip id is not enough on its own: undo and redo restore the very
     // same `TrackClip` values, UUIDs included, so an id can resolve again after a round
-    // trip. While the edits still run synchronously the check cannot fail — it is
-    // moving their file work off the main thread (C4b) that makes it load-bearing.
-    private var editEpoch = 0
+    // trip. Readable from outside so `RecordingController`, whose take-finish work also
+    // runs off-main, can apply the same guard.
+    private(set) var editEpoch = 0
+
+    // Identifies the trim editor session an off-main apply belongs to. Bumped when the
+    // editor opens *and* when it closes, so an apply that lands after the user cancelled
+    // is dropped. The epoch can't do this job: cancel is not a wholesale clip-set change,
+    // so it bumps nothing. Checking `trimmingTrack` is not enough either — cancelling and
+    // re-opening TRIM on the same track restores the identical value, and the stale apply
+    // would then trim the clip and wipe the waveform of the editor now on screen.
+    private var trimSession = 0
 
     init(manager: AudioManager) {
         self.manager = manager
@@ -379,14 +408,32 @@ final class TransportController {
     func openTrimEditor(_ trackIndex: Int) {
         guard trackIndex < manager.tracks.count, let clip = manager.tracks[trackIndex].clips.last else { return }
         if manager.tracks[trackIndex].isPlaying { stopTrackLoop(trackIndex) }
+        // The editor opens on the clip's duration straight away; the waveform needs a
+        // full read of the file, so it arrives off-main a moment later.
         manager.trimClipDuration = clip.duration
-        manager.trimPeaks = computePeaks(url: clip.url, count: 256)
+        manager.trimPeaks = []
         manager.trimStart = 0
         manager.trimEnd = 1
         manager.trimmingTrack = trackIndex
+        trimSession += 1
+        let session = trimSession
+        let url = clip.url
+        let epoch = editEpoch
+        manager.runOffMain(busy: "Reading waveform…") {
+            computePeaks(url: url, count: 256)
+        } apply: { [weak self] peaks in
+            guard let self, epoch == self.editEpoch else { return }
+            // Bail if the editor was cancelled, or closed and re-opened, while the read
+            // ran — otherwise a stale waveform lands in the editor now on screen.
+            guard session == self.trimSession else { return }
+            self.manager.trimPeaks = peaks
+        }
     }
 
     func cancelTrim() {
+        // Bump first: an apply already in flight re-checks the token on the main thread,
+        // so this is what makes the cancel take effect.
+        trimSession += 1
         manager.trimmingTrack = nil
         manager.trimPeaks = []
     }
@@ -394,55 +441,85 @@ final class TransportController {
     func applyTrim() {
         guard let ti = manager.trimmingTrack, ti < manager.tracks.count,
               let clip = manager.tracks[ti].clips.last else { return }
-        // Capture what the work needs by value, plus the two identities to re-check it
-        // against before applying: the clip's id (its index is not stable) and the edit
-        // epoch (the whole clip set can be replaced under us).
+        // Capture what the work needs by value, plus the identities to re-check it
+        // against before applying: the editor session (the user may cancel while this
+        // runs), the clip's id (its index is not stable) and the edit epoch (the whole
+        // clip set can be replaced under us).
+        let session = trimSession
         let epoch = editEpoch
         let clipID = clip.id
-        pushUndo()
-        guard let srcFile = try? AVAudioFile(forReading: clip.url) else { return }
-        let totalFrames = Int64(srcFile.length)
-        let startFrame = Int64(manager.trimStart * Double(totalFrames))
-        let endFrame = Int64(manager.trimEnd * Double(totalFrames))
-        let trimmedFrames = AVAudioFrameCount(max(0, endFrame - startFrame))
-        guard trimmedFrames > 0 else { return }
+        let srcURL = clip.url
+        let startFrac = manager.trimStart
+        let endFrac = manager.trimEnd
 
-        // Read the source region
-        srcFile.framePosition = startFrame
-        guard let readBuf = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: trimmedFrames) else { return }
-        do { try srcFile.read(into: readBuf, frameCount: trimmedFrames) } catch { return }
+        manager.runOffMain(busy: "Trimming…") { () -> EditOutcome in
+            guard let srcFile = try? AVAudioFile(forReading: srcURL) else {
+                return .failed("Cannot read clip file")
+            }
+            let totalFrames = Int64(srcFile.length)
+            let startFrame = Int64(startFrac * Double(totalFrames))
+            let endFrame = Int64(endFrac * Double(totalFrames))
+            let trimmedFrames = AVAudioFrameCount(max(0, endFrame - startFrame))
+            guard trimmedFrames > 0 else { return .failed("Trim range is empty") }
 
-        // Write trimmed file
-        let dir = clip.url.deletingLastPathComponent()
-        let trimName = "\(uniqueFileStem("trim")).wav"
-        let trimURL = dir.appendingPathComponent(trimName)
-        do {
-            let outFile = try AVAudioFile(forWriting: trimURL, settings: srcFile.fileFormat.settings,
-                                           commonFormat: .pcmFormatFloat32, interleaved: false)
-            try outFile.write(from: readBuf)
-        } catch {
-            try? FileManager.default.removeItem(at: trimURL)   // a failed write can leave a partial file
-            manager.status = "Trim error: \(error.localizedDescription)"
-            return
+            // Read the source region
+            srcFile.framePosition = startFrame
+            guard let readBuf = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat,
+                                                 frameCapacity: trimmedFrames) else {
+                return .failed("Cannot allocate a buffer for the trim")
+            }
+            do { try srcFile.read(into: readBuf, frameCount: trimmedFrames) }
+            catch { return .failed("Trim read error: \(error.localizedDescription)") }
+
+            // Write the trimmed file
+            let trimURL = srcURL.deletingLastPathComponent()
+                .appendingPathComponent("\(uniqueFileStem("trim")).wav")
+            do {
+                let outFile = try AVAudioFile(forWriting: trimURL, settings: srcFile.fileFormat.settings,
+                                              commonFormat: .pcmFormatFloat32, interleaved: false)
+                try outFile.write(from: readBuf)
+            } catch {
+                try? FileManager.default.removeItem(at: trimURL)   // a failed write can leave a partial file
+                return .failed("Trim error: \(error.localizedDescription)")
+            }
+            return .produced([EditedClip(url: trimURL,
+                                         duration: Double(trimmedFrames) / srcFile.fileFormat.sampleRate,
+                                         peaks: computePeaks(url: trimURL, count: Theme.clipPeaks))])
+        } apply: { [weak self] outcome in
+            guard let self else { return }
+            let m = self.manager
+            guard case .produced(let made) = outcome, let trimmed = made.first else {
+                if case .failed(let message) = outcome { m.status = message }
+                return
+            }
+            // Exempt the new file from the orphan sweep that `pushUndo` is about to run:
+            // written, but no clip references it until the lines below.
+            self.registerPendingFile(trimmed.url)
+            guard session == self.trimSession else {
+                // CANCEL was pressed while this ran. The user's instruction is the later
+                // one, so the trim is dropped — including the file it wrote.
+                self.abandonPendingFile(trimmed.url)
+                m.status = "Trim cancelled"
+                return
+            }
+            guard epoch == self.editEpoch, let ci = self.indexOfClip(clipID, on: ti) else {
+                self.abandonPendingFile(trimmed.url)
+                m.status = "Trim cancelled — the clip changed while it ran"
+                return
+            }
+            self.pushUndo()
+            m.tracks[ti].clips[ci] = TrackClip(url: trimmed.url, duration: trimmed.duration,
+                                               peaks: trimmed.peaks)
+            self.registerSessionFile(trimmed.url)   // now referenced, so it can be swept again
+            self.trackBuffers[ti] = nil
+            self.loadTrackBuffer(ti)
+            // Closing the editor ends this session too, so the waveform read opened with
+            // it can't land on whatever the user opens next.
+            self.trimSession += 1
+            m.trimmingTrack = nil
+            m.trimPeaks = []
+            m.status = "Trimmed → \(trimmed.url.lastPathComponent)"
         }
-        registerPendingFile(trimURL)   // written, nothing references it yet
-
-        guard epoch == editEpoch, let ci = indexOfClip(clipID, on: ti) else {
-            abandonPendingFile(trimURL)
-            manager.status = "Trim cancelled — the clip changed while it ran"
-            return
-        }
-
-        // Replace clip
-        let dur = Double(trimmedFrames) / srcFile.fileFormat.sampleRate
-        let peaks = computePeaks(url: trimURL, count: Theme.clipPeaks)
-        manager.tracks[ti].clips[ci] = TrackClip(url: trimURL, duration: dur, peaks: peaks)
-        registerSessionFile(trimURL)   // now referenced, so it can be swept again
-        trackBuffers[ti] = nil
-        loadTrackBuffer(ti)
-        manager.trimmingTrack = nil
-        manager.trimPeaks = []
-        manager.status = "Trimmed → \(trimName)"
     }
 
     // MARK: - Split & Duplicate
@@ -452,6 +529,8 @@ final class TransportController {
             manager.status = "No clip to split on TRK \(String(format: "%02d", trackIndex + 1))"
             return
         }
+        // Read the split point first: stopping the loop below resets this track's
+        // playhead to zero, and a running loop would keep advancing it.
         let progress = manager.live.playhead.trackProgress[trackIndex]
         guard progress > 0.001 && progress < 0.999 else {
             manager.status = "Move playhead inside clip to split"
@@ -462,82 +541,107 @@ final class TransportController {
         let clipIndex = manager.tracks[trackIndex].clips.count - 1
         let clip = manager.tracks[trackIndex].clips[clipIndex]
         let clipID = clip.id
-        guard let srcFile = try? AVAudioFile(forReading: clip.url) else {
-            manager.status = "Cannot read clip file"; return
-        }
-        let totalFrames = Int64(srcFile.length)
-        let splitFrame = Int64(progress * Double(totalFrames))
-        let framesA = AVAudioFrameCount(splitFrame)
-        let framesB = AVAudioFrameCount(totalFrames - splitFrame)
-        guard framesA > 0 && framesB > 0 else {
-            manager.status = "Split point too close to edge"; return
-        }
-
+        let srcURL = clip.url
         let wasPlaying = manager.tracks[trackIndex].isPlaying
         if wasPlaying { stopTrackLoop(trackIndex) }
 
-        let dir = clip.url.deletingLastPathComponent()
+        manager.runOffMain(busy: "Splitting…") { () -> EditOutcome in
+            guard let srcFile = try? AVAudioFile(forReading: srcURL) else {
+                return .failed("Cannot read clip file")
+            }
+            let totalFrames = Int64(srcFile.length)
+            let splitFrame = Int64(progress * Double(totalFrames))
+            let framesA = AVAudioFrameCount(splitFrame)
+            let framesB = AVAudioFrameCount(totalFrames - splitFrame)
+            guard framesA > 0 && framesB > 0 else {
+                return .failed("Split point too close to edge")
+            }
 
-        // Part A: frames 0..<splitFrame
-        srcFile.framePosition = 0
-        guard let bufA = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: framesA) else { return }
-        do { try srcFile.read(into: bufA, frameCount: framesA) } catch { manager.status = "Split read error"; return }
-        let urlA = dir.appendingPathComponent("\(uniqueFileStem("split_A")).wav")
-        do {
-            let outA = try AVAudioFile(forWriting: urlA, settings: srcFile.fileFormat.settings,
-                                       commonFormat: .pcmFormatFloat32, interleaved: false)
-            try outA.write(from: bufA)
-        } catch {
-            try? FileManager.default.removeItem(at: urlA)   // a failed write can leave a partial file
-            manager.status = "Split write error: \(error.localizedDescription)"
-            return
+            let dir = srcURL.deletingLastPathComponent()
+            let sr = srcFile.fileFormat.sampleRate
+
+            // Part A: frames 0..<splitFrame. Nothing is registered as a session file
+            // until the apply below installs the clips, so a failure here only has to
+            // delete what it wrote.
+            srcFile.framePosition = 0
+            guard let bufA = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat,
+                                              frameCapacity: framesA) else {
+                return .failed("Cannot allocate a buffer for the split")
+            }
+            do { try srcFile.read(into: bufA, frameCount: framesA) }
+            catch { return .failed("Split read error") }
+            let urlA = dir.appendingPathComponent("\(uniqueFileStem("split_A")).wav")
+            do {
+                let outA = try AVAudioFile(forWriting: urlA, settings: srcFile.fileFormat.settings,
+                                           commonFormat: .pcmFormatFloat32, interleaved: false)
+                try outA.write(from: bufA)
+            } catch {
+                try? FileManager.default.removeItem(at: urlA)   // a failed write can leave a partial file
+                return .failed("Split write error: \(error.localizedDescription)")
+            }
+
+            // Part B: frames splitFrame..<totalFrames
+            srcFile.framePosition = splitFrame
+            guard let bufB = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat,
+                                              frameCapacity: framesB) else {
+                try? FileManager.default.removeItem(at: urlA)
+                return .failed("Cannot allocate a buffer for the split")
+            }
+            do { try srcFile.read(into: bufB, frameCount: framesB) } catch {
+                try? FileManager.default.removeItem(at: urlA)
+                return .failed("Split read error")
+            }
+            let urlB = dir.appendingPathComponent("\(uniqueFileStem("split_B")).wav")
+            do {
+                let outB = try AVAudioFile(forWriting: urlB, settings: srcFile.fileFormat.settings,
+                                           commonFormat: .pcmFormatFloat32, interleaved: false)
+                try outB.write(from: bufB)
+            } catch {
+                try? FileManager.default.removeItem(at: urlB)
+                try? FileManager.default.removeItem(at: urlA)
+                return .failed("Split write error: \(error.localizedDescription)")
+            }
+
+            return .produced([
+                EditedClip(url: urlA, duration: Double(framesA) / sr,
+                           peaks: computePeaks(url: urlA, count: Theme.clipPeaks)),
+                EditedClip(url: urlB, duration: Double(framesB) / sr,
+                           peaks: computePeaks(url: urlB, count: Theme.clipPeaks)),
+            ])
+        } apply: { [weak self] outcome in
+            guard let self else { return }
+            let m = self.manager
+            guard case .produced(let made) = outcome, made.count == 2 else {
+                if case .failed(let message) = outcome { m.status = message }
+                // The track was stopped before the file work began, so put it back the
+                // way it was found — a split that didn't happen shouldn't stop playback.
+                if wasPlaying { self.startTrackLoop(trackIndex) }
+                return
+            }
+            let (partA, partB) = (made[0], made[1])
+            self.registerPendingFile(partA.url)   // exempt from the sweep `pushUndo` runs
+            self.registerPendingFile(partB.url)
+            guard epoch == self.editEpoch, let ci = self.indexOfClip(clipID, on: trackIndex) else {
+                self.abandonPendingFile(partA.url)
+                self.abandonPendingFile(partB.url)
+                m.status = "Split cancelled — the clip changed while it ran"
+                return
+            }
+
+            self.pushUndo()
+            m.tracks[trackIndex].clips.remove(at: ci)
+            m.tracks[trackIndex].clips.insert(
+                TrackClip(url: partA.url, duration: partA.duration, peaks: partA.peaks), at: ci)
+            m.tracks[trackIndex].clips.insert(
+                TrackClip(url: partB.url, duration: partB.duration, peaks: partB.peaks), at: ci + 1)
+            self.registerSessionFile(partA.url)   // now referenced, so they can be swept again
+            self.registerSessionFile(partB.url)
+
+            self.trackBuffers[trackIndex] = nil
+            self.loadTrackBuffer(trackIndex)
+            m.projectDirty = true
+            m.status = "Split TRK \(String(format: "%02d", trackIndex + 1)) at \(Int(progress * 100))%"
         }
-        registerPendingFile(urlA)   // written, nothing references it yet
-
-        // Part B: frames splitFrame..<totalFrames
-        srcFile.framePosition = splitFrame
-        guard let bufB = AVAudioPCMBuffer(pcmFormat: srcFile.processingFormat, frameCapacity: framesB) else {
-            abandonPendingFile(urlA); return
-        }
-        do { try srcFile.read(into: bufB, frameCount: framesB) } catch {
-            manager.status = "Split read error"; abandonPendingFile(urlA); return
-        }
-        let urlB = dir.appendingPathComponent("\(uniqueFileStem("split_B")).wav")
-        do {
-            let outB = try AVAudioFile(forWriting: urlB, settings: srcFile.fileFormat.settings,
-                                       commonFormat: .pcmFormatFloat32, interleaved: false)
-            try outB.write(from: bufB)
-        } catch {
-            try? FileManager.default.removeItem(at: urlB)
-            manager.status = "Split write error: \(error.localizedDescription)"
-            abandonPendingFile(urlA)
-            return
-        }
-        registerPendingFile(urlB)
-
-        let sr = srcFile.fileFormat.sampleRate
-        let clipA = TrackClip(url: urlA, duration: Double(framesA) / sr,
-                              peaks: computePeaks(url: urlA, count: Theme.clipPeaks))
-        let clipB = TrackClip(url: urlB, duration: Double(framesB) / sr,
-                              peaks: computePeaks(url: urlB, count: Theme.clipPeaks))
-
-        guard epoch == editEpoch, let ci = indexOfClip(clipID, on: trackIndex) else {
-            abandonPendingFile(urlA); abandonPendingFile(urlB)
-            manager.status = "Split cancelled — the clip changed while it ran"
-            return
-        }
-
-        pushUndo()
-        manager.tracks[trackIndex].clips.remove(at: ci)
-        manager.tracks[trackIndex].clips.insert(clipA, at: ci)
-        manager.tracks[trackIndex].clips.insert(clipB, at: ci + 1)
-        registerSessionFile(urlA)   // now referenced, so they can be swept again
-        registerSessionFile(urlB)
-
-        trackBuffers[trackIndex] = nil
-        loadTrackBuffer(trackIndex)
-        manager.projectDirty = true
-        manager.status = "Split TRK \(String(format: "%02d", trackIndex + 1)) at \(Int(progress * 100))%"
     }
 
     func duplicateClip(_ trackIndex: Int, clipIndex: Int? = nil) {
@@ -551,33 +655,42 @@ final class TransportController {
         let clip = manager.tracks[trackIndex].clips[ci]
         let clipID = clip.id
 
-        let fm = FileManager.default
         let dir = clip.url.deletingLastPathComponent()
         let base = clip.url.deletingPathExtension().lastPathComponent
         let ext = clip.url.pathExtension
+        // Name the copy on the main thread, at tap time, so two quick duplicates are
+        // numbered in the order they were asked for.
         let dupURL = dir.appendingPathComponent("\(uniqueFileStem("\(base)_dup")).\(ext)")
-        do {
-            try fm.copyItem(at: clip.url, to: dupURL)
-        } catch {
-            manager.status = "Duplicate error: \(error.localizedDescription)"; return
-        }
-        registerPendingFile(dupURL)   // written, nothing references it yet
 
-        let peaks = computePeaks(url: dupURL, count: Theme.clipPeaks)
-        let newClip = TrackClip(url: dupURL, duration: clip.duration, peaks: peaks,
-                                fadeIn: clip.fadeIn, fadeOut: clip.fadeOut)
-        guard epoch == editEpoch, let at = indexOfClip(clipID, on: trackIndex) else {
-            abandonPendingFile(dupURL)
-            manager.status = "Duplicate cancelled — the clip changed while it ran"
-            return
+        manager.runOffMain(busy: "Duplicating…") { () -> EditOutcome in
+            do { try FileManager.default.copyItem(at: clip.url, to: dupURL) }
+            catch { return .failed("Duplicate error: \(error.localizedDescription)") }
+            return .produced([EditedClip(url: dupURL, duration: clip.duration,
+                                         peaks: computePeaks(url: dupURL, count: Theme.clipPeaks))])
+        } apply: { [weak self] outcome in
+            guard let self else { return }
+            let m = self.manager
+            guard case .produced(let made) = outcome, let copy = made.first else {
+                if case .failed(let message) = outcome { m.status = message }
+                return
+            }
+            self.registerPendingFile(copy.url)   // exempt from the sweep `pushUndo` runs
+            guard epoch == self.editEpoch, let at = self.indexOfClip(clipID, on: trackIndex) else {
+                self.abandonPendingFile(copy.url)
+                m.status = "Duplicate cancelled — the clip changed while it ran"
+                return
+            }
+            self.pushUndo()
+            // The copy keeps the original's fades, and is the clip that ends up selected.
+            m.tracks[trackIndex].clips.insert(
+                TrackClip(url: copy.url, duration: copy.duration, peaks: copy.peaks,
+                          fadeIn: clip.fadeIn, fadeOut: clip.fadeOut), at: at + 1)
+            self.registerSessionFile(copy.url)   // now referenced, so it can be swept again
+            self.trackBuffers[trackIndex] = nil
+            self.loadTrackBuffer(trackIndex)
+            m.projectDirty = true
+            m.status = "Duplicated clip → \(copy.url.lastPathComponent)"
         }
-        pushUndo()
-        manager.tracks[trackIndex].clips.insert(newClip, at: at + 1)
-        registerSessionFile(dupURL)   // now referenced, so it can be swept again
-        trackBuffers[trackIndex] = nil
-        loadTrackBuffer(trackIndex)
-        manager.projectDirty = true
-        manager.status = "Duplicated clip → \(dupURL.lastPathComponent)"
     }
 
     // MARK: - Export
@@ -592,13 +705,16 @@ final class TransportController {
         panel.allowedContentTypes = [.wav]
         panel.nameFieldStringValue = "TRK\(String(format: "%02d", trackIndex + 1))_\(timestampFmt.string(from: Date())).wav"
         panel.title = "Export Track \(trackIndex + 1)"
+        let srcURL = clip.url
         panel.begin { [weak self] response in
-            guard response == .OK, let destURL = panel.url else { return }
-            do {
-                try FileManager.default.copyItem(at: clip.url, to: destURL)
-                DispatchQueue.main.async { self?.manager.status = "Exported → \(destURL.lastPathComponent)" }
-            } catch {
-                DispatchQueue.main.async { self?.manager.status = "Export error: \(error.localizedDescription)" }
+            guard let self, response == .OK, let destURL = panel.url else { return }
+            self.manager.runOffMain(busy: "Exporting…") { () -> String? in
+                do { try FileManager.default.copyItem(at: srcURL, to: destURL); return nil }
+                catch { return error.localizedDescription }
+            } apply: { [weak self] error in
+                guard let self else { return }
+                self.manager.status = error.map { "Export error: \($0)" }
+                    ?? "Exported → \(destURL.lastPathComponent)"
             }
         }
         #else
@@ -608,31 +724,50 @@ final class TransportController {
 
     func importAudioFile(_ url: URL, toTrack trackIndex: Int) {
         guard trackIndex < manager.tracks.count else { return }
-        let fm = FileManager.default
 
-        // Validate it's a readable audio file
-        guard let file = try? AVAudioFile(forReading: url) else {
-            manager.status = "Cannot read audio file: \(url.lastPathComponent)"
-            return
-        }
-
-        // Copy into track directory
+        // The destination is fixed here so the copy and the peaks read below can run
+        // off-main against a path that no longer depends on the save location.
         let trackDir = manager.saveLocation.appendingPathComponent("Track \(String(format: "%02d", trackIndex + 1))")
-        try? fm.createDirectory(at: trackDir, withIntermediateDirectories: true)
         let destURL = trackDir.appendingPathComponent(url.lastPathComponent)
-        if !fm.fileExists(atPath: destURL.path) {
-            do { try fm.copyItem(at: url, to: destURL) }
-            catch { manager.status = "Import error: \(error.localizedDescription)"; return }
-        }
+        let epoch = editEpoch
 
-        let duration = Double(file.length) / file.fileFormat.sampleRate
-        let peaks = computePeaks(url: destURL, count: Theme.clipPeaks)
-        let clip = TrackClip(url: destURL, duration: duration, peaks: peaks)
-        pushUndo()
-        manager.tracks[trackIndex].clips.append(clip)
-        loadTrackBuffer(trackIndex)
-        manager.projectDirty = true
-        manager.status = "Imported \(url.lastPathComponent) → TRK \(String(format: "%02d", trackIndex + 1))"
+        manager.runOffMain(busy: "Importing…") { () -> EditOutcome in
+            let fm = FileManager.default
+            // Validate it's a readable audio file
+            guard let file = try? AVAudioFile(forReading: url) else {
+                return .failed("Cannot read audio file: \(url.lastPathComponent)")
+            }
+            // Copy into track directory. A file already sitting at the destination is
+            // reused as-is — it may not be ours to overwrite.
+            try? fm.createDirectory(at: trackDir, withIntermediateDirectories: true)
+            if !fm.fileExists(atPath: destURL.path) {
+                do { try fm.copyItem(at: url, to: destURL) }
+                catch { return .failed("Import error: \(error.localizedDescription)") }
+            }
+            return .produced([EditedClip(url: destURL,
+                                         duration: Double(file.length) / file.fileFormat.sampleRate,
+                                         peaks: computePeaks(url: destURL, count: Theme.clipPeaks))])
+        } apply: { [weak self] outcome in
+            guard let self else { return }
+            let m = self.manager
+            guard case .produced(let made) = outcome, let imported = made.first else {
+                if case .failed(let message) = outcome { m.status = message }
+                return
+            }
+            // Deliberately not registered as a session file: it is the user's own audio
+            // copied in, and the name came from their file, so the orphan sweep must
+            // never decide it is spare. See `sessionCreatedFiles`.
+            guard epoch == self.editEpoch else {
+                m.status = "Import cancelled — the session changed while it ran"
+                return
+            }
+            self.pushUndo()
+            m.tracks[trackIndex].clips.append(
+                TrackClip(url: imported.url, duration: imported.duration, peaks: imported.peaks))
+            self.loadTrackBuffer(trackIndex)
+            m.projectDirty = true
+            m.status = "Imported \(url.lastPathComponent) → TRK \(String(format: "%02d", trackIndex + 1))"
+        }
     }
 
     func changeSaveLocation() {
@@ -671,95 +806,112 @@ final class TransportController {
     func bounceMixdown() {
         #if os(macOS)
         let anySolo = manager.tracks.contains { $0.solo }
-        // Collect audible tracks with audio
-        var sources: [(buffer: AVAudioPCMBuffer, volume: Float, pan: Float)] = []
-        for (_, t) in manager.tracks.enumerated() {
+        // Capture the audible tracks on the main thread; the mix below reads only this
+        // snapshot, so an edit landing mid-bounce can't change what is being mixed.
+        var sources: [(url: URL, volume: Float, pan: Float, fadeIn: Double, fadeOut: Double)] = []
+        for t in manager.tracks {
             let audible = t.solo || (!anySolo && !t.muted)
             guard audible, let clip = t.clips.last else { continue }
-            guard let file = try? AVAudioFile(forReading: clip.url) else { continue }
-            let frames = AVAudioFrameCount(file.length)
-            guard let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: frames) else { continue }
-            do { try file.read(into: buf) } catch { continue }
-            // Fade the clip's own ends before mixing. A track shorter than the mix is
-            // loop-filled in the mix loop below, so its fade repeats each pass.
-            applyClipFades(buf, fadeIn: clip.fadeIn, fadeOut: clip.fadeOut)
-            sources.append((buf, Float(t.volume), Float(t.pan)))
+            sources.append((clip.url, Float(t.volume), Float(t.pan), clip.fadeIn, clip.fadeOut))
         }
         guard !sources.isEmpty else { manager.status = "No audible tracks to bounce"; return }
 
-        // Find the longest track duration
-        let maxFrames = sources.map { Int($0.buffer.frameLength) }.max()!
-        let fmt = sources[0].buffer.format
-        let sr = fmt.sampleRate
-        let channels = Int(fmt.channelCount)
-
-        guard let outBuf = AVAudioPCMBuffer(pcmFormat: fmt, frameCapacity: AVAudioFrameCount(maxFrames)) else { return }
-        outBuf.frameLength = AVAudioFrameCount(maxFrames)
-
-        // Zero the output
-        for ch in 0..<channels {
-            let ptr = outBuf.floatChannelData![ch]
-            for f in 0..<maxFrames { ptr[f] = 0 }
-        }
-
+        // The spinner covers the whole bounce — reading every clip and mixing it is the
+        // slow part, and it is what the button being disabled is telling the user about.
         manager.bounceStatus = "Mixing..."
+        manager.runOffMain(busy: "Mixing…") { () -> MixedDown? in
+            // Read each source in full, fading its ends first. A track shorter than the
+            // mix is loop-filled in the mix loop below, so its fade repeats each pass.
+            var loaded: [(buffer: AVAudioPCMBuffer, volume: Float, pan: Float)] = []
+            for src in sources {
+                guard let file = try? AVAudioFile(forReading: src.url) else { continue }
+                let frames = AVAudioFrameCount(file.length)
+                guard let buf = AVAudioPCMBuffer(pcmFormat: file.processingFormat,
+                                                 frameCapacity: frames) else { continue }
+                do { try file.read(into: buf) } catch { continue }
+                applyClipFades(buf, fadeIn: src.fadeIn, fadeOut: src.fadeOut)
+                loaded.append((buf, src.volume, src.pan))
+            }
+            guard !loaded.isEmpty else { return nil }
 
-        // Mix each source into the output
-        for src in sources {
-            let srcLen = Int(src.buffer.frameLength)
-            let vol = src.volume
-            // Simple equal-power pan: left = cos(angle), right = sin(angle)
-            let angle = (src.pan + 1.0) * 0.5 * Float.pi * 0.5  // 0..pi/2
-            let gainL = vol * cosf(angle)
-            let gainR = vol * sinf(angle)
-            let gains = channels >= 2 ? [gainL, gainR] : [vol]
+            let maxFrames = loaded.map { Int($0.buffer.frameLength) }.max()!
+            let fmt = loaded[0].buffer.format
+            let channels = Int(fmt.channelCount)
+            guard let outBuf = AVAudioPCMBuffer(pcmFormat: fmt,
+                                                frameCapacity: AVAudioFrameCount(maxFrames)) else { return nil }
+            outBuf.frameLength = AVAudioFrameCount(maxFrames)
 
-            for ch in 0..<min(channels, 2) {
-                let outPtr = outBuf.floatChannelData![ch]
-                let srcPtr = src.buffer.floatChannelData![min(ch, Int(src.buffer.format.channelCount) - 1)]
-                let g = gains[ch]
-                for f in 0..<maxFrames {
-                    let srcFrame = f % srcLen  // loop shorter tracks
-                    outPtr[f] += srcPtr[srcFrame] * g
+            // Zero the output before accumulating into it
+            for ch in 0..<channels {
+                let ptr = outBuf.floatChannelData![ch]
+                for f in 0..<maxFrames { ptr[f] = 0 }
+            }
+
+            // Mix each source into the output
+            for src in loaded {
+                let srcLen = Int(src.buffer.frameLength)
+                // Simple equal-power pan: left = cos(angle), right = sin(angle)
+                let angle = (src.pan + 1.0) * 0.5 * Float.pi * 0.5  // 0..pi/2
+                let gainL = src.volume * cosf(angle)
+                let gainR = src.volume * sinf(angle)
+                let gains = channels >= 2 ? [gainL, gainR] : [src.volume]
+
+                for ch in 0..<min(channels, 2) {
+                    let outPtr = outBuf.floatChannelData![ch]
+                    let srcPtr = src.buffer.floatChannelData![min(ch, Int(src.buffer.format.channelCount) - 1)]
+                    let g = gains[ch]
+                    for f in 0..<maxFrames {
+                        let srcFrame = f % srcLen  // loop shorter tracks
+                        outPtr[f] += srcPtr[srcFrame] * g
+                    }
                 }
             }
-        }
 
-        // Soft-clip via tanh to prevent digital overs
-        for ch in 0..<channels {
-            let ptr = outBuf.floatChannelData![ch]
-            for f in 0..<maxFrames { ptr[f] = tanhf(ptr[f]) }
-        }
+            // Soft-clip via tanh to prevent digital overs
+            for ch in 0..<channels {
+                let ptr = outBuf.floatChannelData![ch]
+                for f in 0..<maxFrames { ptr[f] = tanhf(ptr[f]) }
+            }
 
-        // Present save panel
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [UTType.wav]
-        panel.nameFieldStringValue = "Mixdown_\(timestampFmt.string(from: Date())).wav"
-        panel.begin { [weak self] response in
-            guard response == .OK, let url = panel.url else {
-                DispatchQueue.main.async { self?.manager.bounceStatus = nil }
+            return MixedDown(buffer: outBuf, sampleRate: fmt.sampleRate, channels: channels)
+        } apply: { [weak self] mixed in
+            guard let self else { return }
+            let m = self.manager
+            guard let mixed else {
+                m.bounceStatus = nil
+                m.status = "No readable tracks to bounce"
                 return
             }
-            do {
-                let settings: [String: Any] = [
-                    AVFormatIDKey: kAudioFormatLinearPCM,
-                    AVSampleRateKey: sr,
-                    AVNumberOfChannelsKey: channels,
-                    AVLinearPCMBitDepthKey: 32,
-                    AVLinearPCMIsFloatKey: true,
-                    AVLinearPCMIsNonInterleaved: true,
-                ]
-                let outFile = try AVAudioFile(forWriting: url, settings: settings,
-                                               commonFormat: .pcmFormatFloat32, interleaved: false)
-                try outFile.write(from: outBuf)
-                DispatchQueue.main.async {
+
+            // Present save panel
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [UTType.wav]
+            panel.nameFieldStringValue = "Mixdown_\(timestampFmt.string(from: Date())).wav"
+            panel.begin { [weak self] response in
+                guard let self, response == .OK, let url = panel.url else {
                     self?.manager.bounceStatus = nil
-                    self?.manager.status = "Mixdown exported → \(url.lastPathComponent)"
+                    return
                 }
-            } catch {
-                DispatchQueue.main.async {
-                    self?.manager.bounceStatus = nil
-                    self?.manager.status = "Mixdown error: \(error.localizedDescription)"
+                self.manager.runOffMain(busy: "Exporting mixdown…") { () -> String? in
+                    do {
+                        let settings: [String: Any] = [
+                            AVFormatIDKey: kAudioFormatLinearPCM,
+                            AVSampleRateKey: mixed.sampleRate,
+                            AVNumberOfChannelsKey: mixed.channels,
+                            AVLinearPCMBitDepthKey: 32,
+                            AVLinearPCMIsFloatKey: true,
+                            AVLinearPCMIsNonInterleaved: true,
+                        ]
+                        let outFile = try AVAudioFile(forWriting: url, settings: settings,
+                                                      commonFormat: .pcmFormatFloat32, interleaved: false)
+                        try outFile.write(from: mixed.buffer)
+                        return nil
+                    } catch { return error.localizedDescription }
+                } apply: { [weak self] error in
+                    guard let self else { return }
+                    self.manager.bounceStatus = nil
+                    self.manager.status = error.map { "Mixdown error: \($0)" }
+                        ?? "Mixdown exported → \(url.lastPathComponent)"
                 }
             }
         }

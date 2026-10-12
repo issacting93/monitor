@@ -57,6 +57,13 @@ class AudioManager: ObservableObject {
     @Published var bounceStatus: String? = nil
     @Published var loopEnabled: Bool = true
 
+    // What an edit is doing off the main thread, or nil when nothing is in flight.
+    // Set by `runOffMain`, which every edit and export routes its file work through.
+    // Views disable the controls that start edits while it is set, so a second tap
+    // can't start a competing edit against state the first one is about to replace.
+    @Published var busyEdit: String? = nil
+    private var busyDepth = 0
+
     // Timeline zoom & playhead follow
     @Published var timelineZoom: Double = 1.0     // 0.5 – 4.0
     @Published var playheadFollow: Bool = true
@@ -262,5 +269,28 @@ class AudioManager: ObservableObject {
     func saveProjectAs() { project.saveAs() }
 
     func openProject() { project.open() }
+
+    // MARK: - Off-main work
+
+    /// Runs an edit's file work off the main thread and `apply` back on it,
+    /// publishing `busy` on `busyEdit` for the duration.
+    ///
+    /// `work` must read only values captured *before* this call — the session state
+    /// they came from can change while it runs. `apply` runs on the main thread.
+    /// Callers whose result can be superseded re-check an epoch inside `apply`.
+    ///
+    /// The label is reference-counted rather than simply cleared on return: a keyboard
+    /// shortcut can start a second edit while one is already running, and the first to
+    /// finish must not re-enable the controls for the one still in flight.
+    func runOffMain<T>(busy: String, work: @escaping () -> T, apply: @escaping (T) -> Void) {
+        busyDepth += 1
+        busyEdit = busy
+        performOffMain(work: work) { [weak self] result in
+            guard let self else { return }
+            self.busyDepth -= 1
+            if self.busyDepth == 0 { self.busyEdit = nil }
+            apply(result)
+        }
+    }
 }
 
