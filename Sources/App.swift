@@ -24,118 +24,132 @@ final class KeyboardShortcutMonitor {
             let hasCmd = flags.contains(.command)
             let noMod = flags.isEmpty || flags == .capsLock
 
-            switch event.keyCode {
+            // Match on the character the key produces, not on its physical position.
+            // keyCode is an ANSI-layout position, so a switch on it binds Cmd+S to
+            // whatever key sits where S does on a US board — on a QWERTZ keyboard that
+            // is the key printed "S" only by coincidence, and the shortcuts silently
+            // move. `charactersIgnoringModifiers` still applies Shift and Caps Lock, so
+            // it is lowercased before matching and the shortcut pairs that differ only
+            // by Shift (Cmd+S / Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z) stay distinguished by
+            // the flag test in their `where` clause.
+            guard let key = event.charactersIgnoringModifiers?.lowercased(), !key.isEmpty else {
+                return event
+            }
+
+            switch key {
 
             // Space — Toggle play/stop (all tracks)
-            case 49 where noMod:
+            case " " where noMod:
                 DispatchQueue.main.async {
                     if audio.isPlaying { audio.stopAll() } else { audio.playAll() }
                 }
                 return nil
 
             // R — Toggle record on selected track
-            case 15 where noMod:
+            case "r" where noMod:
                 DispatchQueue.main.async { audio.toggleTrackRecord(audio.selectedTrack) }
                 return nil
 
             // M — Toggle mute on selected track
-            case 46 where noMod:
+            case "m" where noMod:
                 DispatchQueue.main.async { audio.toggleMute(audio.selectedTrack) }
                 return nil
 
             // S — Toggle solo on selected track
-            case 1 where noMod:
+            case "s" where noMod:
                 DispatchQueue.main.async { audio.toggleSolo(audio.selectedTrack) }
                 return nil
 
-            // 1–8 — Select/arm track (main number row keycodes)
-            case 18 where noMod: DispatchQueue.main.async { audio.selectedTrack = 0 }; return nil
-            case 19 where noMod: DispatchQueue.main.async { audio.selectedTrack = 1 }; return nil
-            case 20 where noMod: DispatchQueue.main.async { audio.selectedTrack = 2 }; return nil
-            case 21 where noMod: DispatchQueue.main.async { audio.selectedTrack = 3 }; return nil
-            case 23 where noMod: DispatchQueue.main.async { audio.selectedTrack = 4 }; return nil
-            case 22 where noMod: DispatchQueue.main.async { audio.selectedTrack = 5 }; return nil
-            case 26 where noMod: DispatchQueue.main.async { audio.selectedTrack = 6 }; return nil
-            case 28 where noMod: DispatchQueue.main.async { audio.selectedTrack = 7 }; return nil
+            // 1–8 — Select/arm track
+            case "1" where noMod: DispatchQueue.main.async { audio.selectedTrack = 0 }; return nil
+            case "2" where noMod: DispatchQueue.main.async { audio.selectedTrack = 1 }; return nil
+            case "3" where noMod: DispatchQueue.main.async { audio.selectedTrack = 2 }; return nil
+            case "4" where noMod: DispatchQueue.main.async { audio.selectedTrack = 3 }; return nil
+            case "5" where noMod: DispatchQueue.main.async { audio.selectedTrack = 4 }; return nil
+            case "6" where noMod: DispatchQueue.main.async { audio.selectedTrack = 5 }; return nil
+            case "7" where noMod: DispatchQueue.main.async { audio.selectedTrack = 6 }; return nil
+            case "8" where noMod: DispatchQueue.main.async { audio.selectedTrack = 7 }; return nil
 
             // Cmd+1–8 — Select take N on the selected track (the plain numbers above are
             // taken by track selection, so the modifier is what distinguishes them)
-            case 18 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 1) }; return nil
-            case 19 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 2) }; return nil
-            case 20 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 3) }; return nil
-            case 21 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 4) }; return nil
-            case 23 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 5) }; return nil
-            case 22 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 6) }; return nil
-            case 26 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 7) }; return nil
-            case 28 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 8) }; return nil
+            case "1" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 1) }; return nil
+            case "2" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 2) }; return nil
+            case "3" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 3) }; return nil
+            case "4" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 4) }; return nil
+            case "5" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 5) }; return nil
+            case "6" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 6) }; return nil
+            case "7" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 7) }; return nil
+            case "8" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 8) }; return nil
 
             // Cmd+Z — Undo
-            case 6 where hasCmd && !flags.contains(.shift):
+            case "z" where hasCmd && !flags.contains(.shift):
                 DispatchQueue.main.async { audio.undo() }
                 return nil
 
             // Cmd+Shift+Z — Redo
-            case 6 where hasCmd && flags.contains(.shift):
+            case "z" where hasCmd && flags.contains(.shift):
                 DispatchQueue.main.async { audio.redo() }
                 return nil
 
             // Cmd+S — Save project
-            case 1 where hasCmd && !flags.contains(.shift):
+            case "s" where hasCmd && !flags.contains(.shift):
                 DispatchQueue.main.async { audio.saveProject() }
                 return nil
 
             // Cmd+Shift+S — Save project as
-            case 1 where hasCmd && flags.contains(.shift):
+            case "s" where hasCmd && flags.contains(.shift):
                 DispatchQueue.main.async { audio.saveProjectAs() }
                 return nil
 
             // Cmd+O — Open project
-            case 31 where hasCmd:
+            case "o" where hasCmd:
                 DispatchQueue.main.async { audio.openProject() }
                 return nil
 
             // Cmd+E — Export selected track
-            case 14 where hasCmd:
+            case "e" where hasCmd:
                 DispatchQueue.main.async { audio.exportTrack(audio.selectedTrack) }
                 return nil
 
             // Cmd+T — Split clip at playhead
-            case 17 where hasCmd:
+            case "t" where hasCmd:
                 DispatchQueue.main.async { audio.splitClipAtPlayhead(audio.selectedTrack) }
                 return nil
 
             // Cmd+D — Duplicate last clip on selected track
-            case 2 where hasCmd:
+            case "d" where hasCmd:
                 DispatchQueue.main.async { audio.duplicateClip(audio.selectedTrack) }
                 return nil
 
-            // Return/Enter — Stop and return to start
-            case 36 where noMod, 76 where noMod:
+            // Return / Enter — Stop and return to start. Return sends CR; the numeric
+            // keypad's Enter sends ETX, which is why both are listed here rather than
+            // left to the character alone.
+            case "\r" where noMod, "\u{3}" where noMod:
                 DispatchQueue.main.async { audio.stopAll() }
                 return nil
 
             // Comma (,) — Toggle metronome
-            case 43 where noMod:
+            case "," where noMod:
                 DispatchQueue.main.async { audio.toggleMetronome() }
                 return nil
 
             // Tab — Switch between Arrange and Monitor views
-            case 48 where noMod:
+            case "\t" where noMod:
                 DispatchQueue.main.async { audio.viewMode = audio.viewMode == 0 ? 1 : 0 }
                 return nil
 
-            // Cmd+Plus — Zoom in timeline (= key is keyCode 24)
-            case 24 where hasCmd:
+            // Cmd+= / Cmd++ — Zoom in timeline (Shift turns = into +)
+            case "=" where hasCmd, "+" where hasCmd:
                 DispatchQueue.main.async { audio.zoomIn() }
                 return nil
 
-            // Cmd+Minus — Zoom out timeline (- key is keyCode 27)
-            case 27 where hasCmd:
+            // Cmd+- / Cmd+_ — Zoom out timeline
+            case "-" where hasCmd, "_" where hasCmd:
                 DispatchQueue.main.async { audio.zoomOut() }
                 return nil
 
             // F — Toggle playhead follow
-            case 3 where noMod:
+            case "f" where noMod:
                 DispatchQueue.main.async { audio.playheadFollow.toggle() }
                 return nil
 
