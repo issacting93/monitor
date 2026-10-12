@@ -1,16 +1,26 @@
 // DeviceController.swift — audio device discovery/selection + MIDI track follow
 //
-// Owns device enumeration, the CoreAudio hardware-property listeners, output
-// switching, and the CoreMIDI input port that follows the OP-XY's active track.
-// The @Published device lists and selections stay on AudioManager so the pickers
-// bind unchanged; this controller writes them through its `manager` reference.
+// Platform-agnostic: all device/route work is delegated to an AudioDeviceProviding
+// (CoreAudio HAL on macOS, AVAudioSession on iOS). This controller owns device
+// enumeration, the change observers, output switching, and the CoreMIDI input port
+// that follows the OP-XY's active track. The @Published device lists and selections
+// stay on AudioManager so the pickers bind unchanged; this controller writes them
+// through its `manager` reference.
 
 import Foundation
-import CoreAudio
 import CoreMIDI
 
 final class DeviceController {
     private unowned let manager: AudioManager
+
+    /// The platform device-I/O implementation (macOS CoreAudio HAL / iOS AVAudioSession).
+    let io: AudioDeviceProviding = {
+        #if os(iOS)
+        AVAudioSessionDeviceProvider()
+        #else
+        CoreAudioDeviceProvider()
+        #endif
+    }()
 
     private var midiClient: MIDIClientRef = 0
     private var midiPort:   MIDIPortRef   = 0
@@ -20,6 +30,7 @@ final class DeviceController {
     }
 
     deinit {
+        io.stopObserving()
         if midiPort != 0 { MIDIPortDispose(midiPort) }
         if midiClient != 0 { MIDIClientDispose(midiClient) }
     }
@@ -27,11 +38,7 @@ final class DeviceController {
     // MARK: - Device discovery
 
     func loadDevices() {
-        let allIDs  = allAudioDevices()
-        let inputs  = allIDs.filter { deviceChannelCount($0, input: true) > 0 }
-                            .map { AudioDevice(id: $0, name: nameOfDevice($0)) }
-        let outputs = allIDs.filter { deviceChannelCount($0, input: false) > 0 }
-                            .map { AudioDevice(id: $0, name: nameOfDevice($0)) }
+        let (inputs, outputs) = io.loadDevices()
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -45,29 +52,43 @@ final class DeviceController {
                     ?? inputs.first?.id
             }
 
-            let currentSysOut = getDefaultAudioDevice(input: false)
             if self.manager.selectedOutputID == nil
                 || !outputs.contains(where: { $0.id == self.manager.selectedOutputID }) {
-                self.manager.selectedOutputID = currentSysOut != 0 ? currentSysOut : outputs.first?.id
+                self.manager.selectedOutputID = outputs.first?.id
             }
         }
     }
 
-    // Listeners are intentionally never removed: the process lives as long as the
-    // app window, and rebuilding the graph on every device change would be worse.
     func setupHardwareListeners() {
-        var devAddr = audioAddress(kAudioHardwarePropertyDevices)
-        AudioObjectAddPropertyListenerBlock(systemObjectID, &devAddr, DispatchQueue.main) { [weak self] _, _ in
-            self?.loadDevices()
-        }
-        var outAddr = audioAddress(kAudioHardwarePropertyDefaultOutputDevice)
-        AudioObjectAddPropertyListenerBlock(systemObjectID, &outAddr, DispatchQueue.main) { [weak self] _, _ in
-            self?.loadDevices()
+        io.startObserving { [weak self] change in
+            guard let self else { return }
+            switch change {
+            case .listChanged:
+                // macOS: keep the list fresh; rebuilding the graph here would be worse.
+                self.loadDevices()
+            case .routeChanged:
+                self.loadDevices()
+                if self.manager.isMonitoring {
+                    self.manager.stopMonitoring(); self.manager.startMonitoring()
+                }
+            case .interruptedBegan:
+                // Finalise any take in progress, then release the engine.
+                if self.manager.isRecording { self.manager.stopRecording() }
+                self.manager.stopMonitoring()
+            case .interruptedEnded:
+                if !self.manager.isMonitoring { self.manager.startMonitoring() }
+            case .mediaServicesReset:
+                if self.manager.isMonitoring {
+                    self.manager.stopMonitoring(); self.manager.startMonitoring()
+                }
+            }
         }
     }
 
-    func switchOutput(to id: AudioDeviceID) {
+    func switchOutput(to id: DeviceID) {
+        guard io.outputSelectionSupported else { return }
         manager.selectedOutputID = id
+        io.applyOutputDevice(id)
         if manager.isMonitoring { manager.stopMonitoring(); manager.startMonitoring() }
     }
 

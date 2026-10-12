@@ -2,6 +2,7 @@
 //
 // Extracted from the AudioManager mono-file. Pure move, no behaviour change.
 
+#if os(macOS)
 import SwiftUI
 import AppKit
 import Foundation
@@ -225,3 +226,4 @@ struct MonitorApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 }
+#endif

@@ -14,8 +14,8 @@ import CoreAudio
 class AudioManager: ObservableObject {
     @Published var inputDevices:     [AudioDevice] = []
     @Published var outputDevices:    [AudioDevice] = []
-    @Published var selectedInputID:  AudioDeviceID?
-    @Published var selectedOutputID: AudioDeviceID?
+    @Published var selectedInputID:  DeviceID?
+    @Published var selectedOutputID: DeviceID?
     @Published var isMonitoring = false
     @Published var isRecording  = false
     @Published var volume: Double = 0.3
@@ -41,11 +41,7 @@ class AudioManager: ObservableObject {
     @Published var presetSaveName: String = ""
 
     // Settings
-    @Published var saveLocation: URL = {
-        let base = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Desktop/OP-XY Monitor/Tracks")
-        return base
-    }()
+    @Published var saveLocation: URL = PlatformPaths.tracksRoot
 
     // Trim editor
     @Published var trimmingTrack: Int? = nil
@@ -152,7 +148,7 @@ class AudioManager: ObservableObject {
 
     func stopMonitoring() { engine.stop() }
 
-    func switchOutput(to id: AudioDeviceID) { device.switchOutput(to: id) }
+    func switchOutput(to id: DeviceID) { device.switchOutput(to: id) }
 
     func applyVolume(_ v: Double) { engine.applyVolume(v) }
 

@@ -10,7 +10,10 @@ import SwiftUI
 import Foundation
 import AVFoundation
 import CoreAudio
+import AudioToolbox
+#if os(macOS)
 import AppKit
+#endif
 import Darwin
 
 // ── Modular Effect System ──────────────────────────────────────────────────

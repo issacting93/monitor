@@ -3,7 +3,9 @@
 // Extracted from the AudioManager mono-file. Pure move, no behaviour change.
 
 import SwiftUI
+#if os(macOS)
 import AppKit
+#endif
 import AVFoundation
 import Foundation
 
@@ -262,6 +264,7 @@ struct TempoControl: View {
     }
 }
 
+#if os(macOS)
 // ── TopBar (TAPE 08 header) ────────────────────────────────────────────────
 
 struct TopBar: View {
@@ -411,6 +414,8 @@ struct TopBar: View {
     }
 }
 
+#endif
+
 // ── Vertical Meter (TAPE 08 style) ──────────────────────────────────────────
 
 struct VerticalMeter: View {
@@ -442,6 +447,8 @@ struct VerticalMeter: View {
         }
     }
 }
+
+#if os(macOS)
 
 // ── Waveform Lane (scrollable middle) ─────────────────────────────────────
 
@@ -844,6 +851,10 @@ struct LoopGridView: View {
                                 .offset(x: CGFloat(phFrac) * laneWidth - laneWidth / 2)
                         }
                     }
+                    // Pin the middle column to the exact remaining width. The horizontal
+                    // ScrollView otherwise reports a smaller intrinsic width, so the row
+                    // stops short of the right edge and the track controls float left of it.
+                    .frame(width: availableW)
                     .onChange(of: playheadTick) {
                         guard audio.isPlaying && audio.playheadFollow && audio.timelineZoom > 1.0 else { return }
                         withAnimation(.easeInOut(duration: 0.35)) {
@@ -2264,3 +2275,4 @@ struct SettingsPanel: View {
         }
     }
 }
+#endif

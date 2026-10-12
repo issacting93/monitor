@@ -8,8 +8,17 @@ import AVFoundation
 
 // ── Models ──────────────────────────────────────────────────────────────────
 
+// A device identifier. On macOS this is the CoreAudio HAL device id; on iOS
+// there is no HAL device id, so it is a synthetic index into the audio session's
+// available inputs (0 = the current output). See AudioDeviceProviding.
+#if os(macOS)
+typealias DeviceID = AudioDeviceID
+#else
+typealias DeviceID = UInt32
+#endif
+
 struct AudioDevice: Identifiable, Hashable {
-    let id: AudioDeviceID
+    let id: DeviceID
     let name: String
 }
 

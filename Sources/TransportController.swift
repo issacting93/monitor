@@ -8,7 +8,9 @@
 // AudioManager and is written through the `manager` reference.
 
 import Foundation
+#if os(macOS)
 import AppKit
+#endif
 import AVFoundation
 import UniformTypeIdentifiers
 
@@ -418,6 +420,7 @@ final class TransportController {
             manager.status = "No clip to export on TRK \(String(format: "%02d", trackIndex + 1))"
             return
         }
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.wav]
         panel.nameFieldStringValue = "TRK\(String(format: "%02d", trackIndex + 1))_\(timestampFmt.string(from: Date())).wav"
@@ -431,6 +434,9 @@ final class TransportController {
                 DispatchQueue.main.async { self?.manager.status = "Export error: \(error.localizedDescription)" }
             }
         }
+        #else
+        manager.status = "Export is not available on iPad yet"
+        #endif
     }
 
     func importAudioFile(_ url: URL, toTrack trackIndex: Int) {
@@ -463,6 +469,7 @@ final class TransportController {
     }
 
     func changeSaveLocation() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -475,11 +482,15 @@ final class TransportController {
                 self?.manager.status = "Save location → \(url.path)"
             }
         }
+        #else
+        manager.status = "Save location is fixed to the app's Documents folder on iPad"
+        #endif
     }
 
     // MARK: - Mixdown Export
 
     func bounceMixdown() {
+        #if os(macOS)
         let anySolo = manager.tracks.contains { $0.solo }
         // Collect audible tracks with audio
         var sources: [(buffer: AVAudioPCMBuffer, volume: Float, pan: Float)] = []
@@ -570,6 +581,9 @@ final class TransportController {
                 }
             }
         }
+        #else
+        manager.status = "Mixdown is not available on iPad yet"
+        #endif
     }
 
     // MARK: - Track Helpers

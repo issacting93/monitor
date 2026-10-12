@@ -43,6 +43,11 @@ final class EngineController {
         // AVAudioEngine and leak the first, leaving two live graphs (doubled audio).
         if m.isMonitoring { stop() }
         kernelEpoch &+= 1   // invalidate any in-flight kernel insert from a prior graph
+
+        // iOS: configure + activate the audio session before anything reads the input
+        // format — it is 0 Hz / 0 ch until the session is active. macOS: no-op.
+        try? m.device.io.prepareForEngineStart()
+
         if m.inputDevices.isEmpty { m.device.loadDevices() }
 
         // Request mic permission off the main thread before touching the audio engine
@@ -70,6 +75,7 @@ final class EngineController {
             m.status = "No input device selected"; return
         }
 
+        #if os(macOS)
         let currentOutID = getDefaultAudioDevice(input: false)
         if currentOutID == inID {
             m.status = "Output = \(inDev.name) — change output to avoid loopback"; return
@@ -82,11 +88,12 @@ final class EngineController {
             && (outName.contains("macbook") || outName.contains("built-in") || outName.contains("speaker")) {
             m.status = "Warning: built-in mic + speakers may cause feedback — use headphones"
         }
+        #endif
 
         let eng = AVAudioEngine()
-        // Select the input device on our own engine instead of the system default, so
-        // we don't take over the input for every other app.
-        setEngineInputDevice(eng, inID)
+        // Point the engine's input at the chosen device without changing the system
+        // default input (macOS AUHAL pin) / set the session's preferred input (iOS).
+        m.device.io.applyInputDevice(inID, to: eng)
         let hwFmt = eng.inputNode.inputFormat(forBus: 0)
 
         guard hwFmt.sampleRate > 0, hwFmt.channelCount > 0 else {
@@ -191,7 +198,7 @@ final class EngineController {
         m.metronome.attach(player: metPlayer, mixer: metMix, sampleRate: stereoFmt.sampleRate)
         m.isMonitoring = true
 
-        m.status = "\(inDev.name) → \(nameOfDevice(currentOutID))"
+        m.status = "\(inDev.name) → \(m.device.io.currentOutputName)"
         m.sampleRateString = "\(Int(hwFmt.sampleRate / 1000)) kHz · 24-bit · Stereo"
         m.meter.startDisplayTimer()
 
@@ -226,7 +233,14 @@ final class EngineController {
         instantiationInFlight = true
         EffectAudioUnit.pendingKernelFactory = factory
         EffectAudioUnit.pendingSampleRate = pendingSampleRate
-        AVAudioUnit.instantiate(with: EffectAudioUnit.componentDesc, options: .loadInProcess) { [weak self] unit, _ in
+        // .loadInProcess is macOS-only; on iOS the registered in-process subclass is
+        // used with the default options.
+        #if os(macOS)
+        let auOptions: AudioComponentInstantiationOptions = .loadInProcess
+        #else
+        let auOptions: AudioComponentInstantiationOptions = []
+        #endif
+        AVAudioUnit.instantiate(with: EffectAudioUnit.componentDesc, options: auOptions) { [weak self] unit, _ in
             DispatchQueue.main.async {
                 guard let self else { return }
                 EffectAudioUnit.pendingKernelFactory = nil

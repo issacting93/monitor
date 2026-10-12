@@ -17,12 +17,7 @@ final class EffectsChainController {
     // startMonitoring; kernel-based nodes are appended asynchronously afterward.
     private var liveChainNodes: [(id: UUID, node: AVAudioNode)] = []
 
-    private static let presetDir: URL = {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Tape08/Presets")
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
+    private static let presetDir: URL = PlatformPaths.presetsDir
 
     init(manager: AudioManager) {
         self.manager = manager

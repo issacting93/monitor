@@ -6,7 +6,9 @@
 // projectDirty) stays on AudioManager and is written through the `manager` reference.
 
 import Foundation
+#if os(macOS)
 import AppKit
+#endif
 import AVFoundation
 import UniformTypeIdentifiers
 
@@ -28,6 +30,7 @@ final class ProjectController {
     }
 
     func saveAs() {
+        #if os(macOS)
         let panel = NSSavePanel()
         panel.title = "Save Project"
         panel.nameFieldStringValue = manager.projectName
@@ -42,6 +45,9 @@ final class ProjectController {
                 self?.performSave(to: url)
             }
         }
+        #else
+        manager.status = "Project save is not available on iPad yet"
+        #endif
     }
 
     private func performSave(to packageURL: URL) {
@@ -125,6 +131,7 @@ final class ProjectController {
     // MARK: - Load
 
     func open() {
+        #if os(macOS)
         let panel = NSOpenPanel()
         panel.title = "Open Project"
         panel.canChooseFiles = true
@@ -137,6 +144,9 @@ final class ProjectController {
                 self?.performLoad(from: url)
             }
         }
+        #else
+        manager.status = "Project load is not available on iPad yet"
+        #endif
     }
 
     private func performLoad(from packageURL: URL) {

@@ -2,6 +2,7 @@
 //
 // Extracted from the AudioManager mono-file. Pure move, no behaviour change.
 
+#if os(macOS)
 import Foundation
 import CoreAudio
 import AVFoundation
@@ -67,3 +68,4 @@ func setEngineInputDevice(_ engine: AVAudioEngine, _ id: AudioDeviceID) {
                          kAudioUnitScope_Global, 0, &dev,
                          UInt32(MemoryLayout<AudioDeviceID>.size))
 }
+#endif
