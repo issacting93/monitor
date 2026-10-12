@@ -1366,7 +1366,13 @@ struct TransportBar: View {
                 } label: {
                     HStack(spacing: 8) {
                         Circle().fill(audio.isRecording ? Theme.bg : Theme.danger).frame(width: 10, height: 10)
-                        Text("REC").font(.system(size: 11, weight: .medium, design: .monospaced)).tracking(3)
+                        // Reads IN while a count-in is pending, so the press that re-arms
+                        // the count is visibly doing something. Fixed width because the two
+                        // labels are different lengths and the transport must not shift
+                        // under the pointer.
+                        Text(audio.countingIn ? "IN" : "REC")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced)).tracking(3)
+                            .frame(width: 30)
                     }
                     .frame(height: 44).padding(.horizontal, 26)
                     .foregroundColor(audio.isRecording ? Theme.bg : Theme.danger)

@@ -151,11 +151,24 @@ final class RecordingController {
     func start() {
         let m = manager
         guard m.isMonitoring else { return }
+        // A second REC press is the stop, and the transport routes it to `stop()` before
+        // it can reach here. Bailing keeps a stray call from opening a second file on top
+        // of the take already rolling.
+        guard !m.isRecording else { return }
 
-        // Count-in: play metronome clicks for N bars before actually recording
-        if m.countInBars > 0 && !m.countingIn {
+        // Count-in: play metronome clicks for N bars before actually recording.
+        //
+        // Pressing REC again re-arms the count from bar 1. It must not fall through to
+        // `begin()`: that started recording on the spot *and* left the pending timer to
+        // fire mid-take, opening a second file over the first.
+        if m.countInBars > 0 {
+            let rearming = m.countingIn
+            countInTimer?.invalidate()
             m.countingIn = true
             m.status = "Count-in..."
+            // On a re-arm the clicks restart with the count, so the new count is heard
+            // from bar 1 instead of against the phase the old one left behind.
+            if rearming { m.metronome.stop() }
             if !m.metronome.isRunning { m.metronome.start() }
             let secsPerBar = 240.0 / m.metronomeBPM
             let countInDuration = secsPerBar * Double(m.countInBars)

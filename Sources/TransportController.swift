@@ -252,14 +252,14 @@ final class TransportController {
 
     func toggleTrackRecord(_ i: Int) {
         manager.selectedTrack = i
-        if manager.countingIn {
-            // Count-in is pending (isRecording is still false) — cancel it instead
-            // of starting a second recording on top of the scheduled one.
-            manager.stopRecording()
-        } else if manager.isRecording {
+        if manager.isRecording {
             manager.stopRecording()
             startTrackLoop(i)
         } else {
+            // Covers the count-in case too: `start()` re-arms a running count from bar 1
+            // rather than dropping straight into recording. Aborting a count-in is STOP's
+            // job, and doing it from here as well would leave REC and STOP both meaning
+            // "cancel" while nothing meant "count again".
             manager.startRecording()
         }
     }
@@ -296,6 +296,13 @@ final class TransportController {
     }
 
     func stopAll() {
+        // A pending count-in or a take in flight is transport state too, so STOP has to
+        // end it. Without this the count-in's timer outlived the stop and began recording
+        // seconds later, and `countingIn` stayed set — which is what then made the next
+        // REC skip its count-in entirely.
+        let wasRecording = manager.isRecording
+        let wasCountingIn = manager.countingIn
+        if wasRecording || wasCountingIn { manager.stopRecording() }
         manager.metronome.stop()
         for i in 0..<manager.tracks.count {
             if i < playerNodes.count { playerNodes[i].stop() }
@@ -303,7 +310,7 @@ final class TransportController {
             manager.live.playhead.trackProgress[i] = 0
         }
         manager.isPlaying = false
-        manager.status = "Stopped"
+        manager.status = wasCountingIn ? "Count-in cancelled" : "Stopped"
     }
 
     // MARK: - Undo/Redo
