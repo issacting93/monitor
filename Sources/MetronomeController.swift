@@ -121,23 +121,33 @@ final class MetronomeController {
     private func refill(accent: AVAudioPCMBuffer, click: AVAudioPCMBuffer, sampleRate: Double) {
         guard let player = player, manager.metronomeEnabled else { return }
 
-        // Tempo changed — drop the queued beats and re-anchor to the current playhead.
-        if scheduledBPM != manager.metronomeBPM {
+        // Tempo changed. The queue holds ~2 s of beats already spaced at the *old* tempo,
+        // and nothing can re-space a queued buffer, so stopping the node is the only way
+        // to flush it. Carry the beat phase across the restart instead of starting a new
+        // bar: the node's timeline restarts at 0, so the remainder of the beat in progress
+        // is expressed from there.
+        if scheduledBPM != manager.metronomeBPM, scheduledBPM > 0 {
+            let oldInterval = framesPerBeat(sampleRate: sampleRate, bpm: scheduledBPM)
+            let newInterval = framesPerBeat(sampleRate: sampleRate, bpm: manager.metronomeBPM)
+            // How far into the beat in progress we already are, 0…1. That beat began one
+            // old interval before the next one is due.
+            var phase: Double = 0
+            if let oldInterval {
+                let elapsed = playheadFrame(of: player) - (nextBeatFrame - oldInterval)
+                phase = min(max(elapsed / oldInterval, 0), 1)
+            }
             player.stop()
             player.play()
             scheduledBPM = manager.metronomeBPM
-            nextBeatFrame = 0
-            beatCount = 0
+            nextBeatFrame = newInterval.map { (1 - phase) * $0 } ?? 0
+            // beatCount is deliberately left alone: the accent pattern continues on the
+            // same beats of the bar rather than restarting the bar under the user.
         }
 
-        let interval = (60.0 / manager.metronomeBPM) * sampleRate   // frames per beat
-        guard interval >= 1 else { return }
+        guard let interval = framesPerBeat(sampleRate: sampleRate, bpm: manager.metronomeBPM) else { return }
 
         // Current playhead position on the node's timeline (0 until it starts rendering).
-        var nowFrame: Double = 0
-        if let nodeTime = player.lastRenderTime, let pt = player.playerTime(forNodeTime: nodeTime) {
-            nowFrame = Double(pt.sampleTime)
-        }
+        let nowFrame = playheadFrame(of: player)
         // If we've fallen behind (e.g. after a stall), resume just ahead of the playhead.
         if nextBeatFrame < nowFrame { nextBeatFrame = nowFrame }
 
@@ -150,6 +160,21 @@ final class MetronomeController {
             beatCount += 1
             nextBeatFrame += interval
         }
+    }
+
+    /// Frames in one beat at `bpm`, or nil when that is under a single frame or the tempo
+    /// is not set — either way there is no grid to schedule against.
+    private func framesPerBeat(sampleRate: Double, bpm: Double) -> Double? {
+        guard bpm > 0 else { return nil }
+        let frames = (60.0 / bpm) * sampleRate
+        return frames >= 1 ? frames : nil
+    }
+
+    /// The player node's own sample clock, in frames: 0 until it starts rendering, and 0
+    /// again after a stop/play, since the node's timeline restarts there.
+    private func playheadFrame(of player: AVAudioPlayerNode) -> Double {
+        guard let nodeTime = player.lastRenderTime, let pt = player.playerTime(forNodeTime: nodeTime) else { return 0 }
+        return Double(pt.sampleTime)
     }
 
     func stop() {
