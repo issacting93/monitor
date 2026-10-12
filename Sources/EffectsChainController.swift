@@ -179,11 +179,14 @@ final class EffectsChainController {
         ]
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // Built-ins are code-defined defaults, so (re)write them on launch. This
-        // keeps them current when their definitions change between builds.
+        // Seed each built-in only when it's absent. Overwriting unconditionally would
+        // destroy a user preset the user saved under one of these names.
+        let fm = FileManager.default
         for (name, chain) in builtIns {
+            let url = presetURL(name: name)
+            guard !fm.fileExists(atPath: url.path) else { continue }
             if let json = try? encoder.encode(chain) {
-                try? json.write(to: presetURL(name: name))
+                try? json.write(to: url)
             }
         }
     }
