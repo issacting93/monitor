@@ -156,7 +156,7 @@ struct ContentView: View {
                 if audio.viewMode == 0 {
                     // Arrange view
                     VStack(spacing: 0) {
-                        ArrangeHeadUnit(audio: audio, live: audio.live)
+                        ArrangeHeadUnit(audio: audio, meters: audio.live.meters)
 
                         // Track label
                         HStack {
@@ -168,7 +168,8 @@ struct ContentView: View {
                         }
                         .padding(.horizontal, 28).padding(.top, 14).padding(.bottom, 6)
 
-                        LoopGridView(audio: audio, live: audio.live)
+                        LoopGridView(audio: audio, playhead: audio.live.playhead,
+                                     trackMeters: audio.live.trackMeters)
                             .frame(maxHeight: .infinity)
 
                         if audio.trimmingTrack != nil {
@@ -179,7 +180,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     // Monitor view
-                    MonitorView(audio: audio, live: audio.live)
+                    MonitorView(audio: audio, meters: audio.live.meters)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }

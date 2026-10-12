@@ -117,18 +117,19 @@ final class MeterController {
 
     /// Clears the live meter outputs (called on stop, after `detach`).
     func resetDisplay() {
-        let live = manager.live
-        live.levelL = 0; live.levelR = 0; live.peakL = 0; live.peakR = 0
-        live.peakDB = -Double.infinity
-        live.waveformSamples = Array(repeating: 0, count: Theme.waveformCount)
+        let m = manager.live.meters
+        m.levelL = 0; m.levelR = 0; m.peakL = 0; m.peakR = 0
+        m.peakDB = -Double.infinity
+        m.waveformSamples = Array(repeating: 0, count: Theme.waveformCount)
         for i in 0..<Theme.trackCount {
-            live.trackLevels[i] = 0
-            live.trackProgress[i] = 0
+            manager.live.trackMeters.levels[i] = 0
+            manager.live.playhead.trackProgress[i] = 0
         }
     }
 
     private func tick() {
-        let live = manager.live
+        let m  = manager.live.meters
+        let tm = manager.live.trackMeters
         let snap = meters.withLock { $0 }
 
         let scaledL = Double(min(snap.levelL * 4.5, 1))
@@ -144,21 +145,21 @@ final class MeterController {
         let scaledPeakR = Double(min(rawPeakR * 4.5, 1))
         let maxPeak     = Double(max(rawPeakL, rawPeakR))
 
-        live.levelL = live.levelL * 0.70 + scaledL * 0.30
-        live.levelR = live.levelR * 0.70 + scaledR * 0.30
-        live.peakL  = scaledPeakL
-        live.peakR  = scaledPeakR
-        live.peakDB = maxPeak > 0 ? 20.0 * log10(maxPeak) : -Double.infinity
+        m.levelL = m.levelL * 0.70 + scaledL * 0.30
+        m.levelR = m.levelR * 0.70 + scaledR * 0.30
+        m.peakL  = scaledPeakL
+        m.peakR  = scaledPeakR
+        m.peakDB = maxPeak > 0 ? 20.0 * log10(maxPeak) : -Double.infinity
 
-        var samples = live.waveformSamples
+        var samples = m.waveformSamples
         samples.removeFirst()
-        samples.append((live.levelL + live.levelR) / 2.0)
-        live.waveformSamples = samples
+        samples.append((m.levelL + m.levelR) / 2.0)
+        m.waveformSamples = samples
 
         // Update per-track meters
         for i in 0..<Theme.trackCount {
             let raw = Double(min(snap.track[i] * 4.5, 1))
-            live.trackLevels[i] = live.trackLevels[i] * 0.7 + raw * 0.3
+            tm.levels[i] = tm.levels[i] * 0.7 + raw * 0.3
         }
 
         // Update track loop progress

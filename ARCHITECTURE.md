@@ -159,7 +159,7 @@ Metronome  Device   EffectsChain Transport Meter Recording Project Engine
 | `DeviceController` | CoreAudio listeners, CoreMIDI client/port | `inputDevices`, `outputDevices`, `selectedInputID/OutputID`, `selectedTrack` (MIDI) |
 | `EffectsChainController` | instantiated chain nodes, preset dir | `liveChain`, `presetNames`, `showPresetSave`, `presetSaveName`, `status` |
 | `TransportController` | player/mixer nodes, decoded buffers, play generations, undo/redo stacks | `tracks`, `isPlaying`, `projectDirty`, trim state, `bounceStatus` |
-| `MeterController` | locked meter snapshot, display timer, taps, smoothing state | `levelL/R`, `peakL/R`, `peakDB`, `waveformSamples`, `trackLevels` |
+| `MeterController` | locked meter snapshot, display timer, taps, smoothing state | `live.meters.*`, `live.trackMeters.levels`, `live.playhead.trackProgress` |
 | `RecordingController` | `AVAudioFile` handle, dry tap, count-in/take timers | `isRecording`, `countingIn`, `recordingDuration`, `recordings`, `tracks` |
 | `ProjectController` | — | `projectURL`, `projectName`, `projectDirty`, `status` |
 | `EngineController` | `AVAudioEngine`, every node it builds, async-insert machinery | `isMonitoring`, `status`, `sampleRateString` |
@@ -382,7 +382,6 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 
 Full detail and severities are in [to_fix.md §8](to_fix.md). Highest-impact **open** items:
 
-- **P1** — 60 Hz mutation of `@Published` state re-renders the whole view tree.
 - **UI-1** — the tape timeline clips when the settings + FX panels are open (fixed-width panels).
 - **U1** — count-in is timed by a `Timer`, not aligned to the metronome grid.
 - **C4** — trim/split/duplicate/import, mixdown and project-save still do I/O on the main thread.
@@ -393,6 +392,10 @@ Resolved on 2026-10-11 (see `to_fix.md` §8.9): **C1** (param/render race), **C2
 epoch), **C3** (render-thread file writes), **C5** (double-engine leak on start-while-monitoring).
 Remaining audio-thread note: the recording tap copies into a lock-guarded ring rather than a truly
 lock-free one.
+
+Resolved on 2026-10-12: **P1** (the 60 Hz display tick re-rendered the whole view tree — the display
+state is now three focused publishers, `MeterState` / `TrackMeterState` / `PlayheadState`, and each
+view observes only the one it draws; the grid's own body no longer re-evaluates on the tick).
 
 **iPad MVP:** monitoring, metering, loop recording, the effect chain, metronome and undo/redo work;
 trim/split/duplicate, project save/load, export and mixdown are deferred (status no-op), and

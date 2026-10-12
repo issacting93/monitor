@@ -74,7 +74,7 @@ final class TransportController {
                     let total = Double(buffer.frameLength)
                     if total > 0 {
                         let cur = abs(Double(playerTime.sampleTime)).truncatingRemainder(dividingBy: total)
-                        manager.live.trackProgress[i] = cur / total
+                        manager.live.playhead.trackProgress[i] = cur / total
                     }
                 }
             }
@@ -144,7 +144,7 @@ final class TransportController {
         playGenerations[i] += 1
         playerNodes[i].stop()
         manager.tracks[i].isPlaying = false
-        manager.live.trackProgress[i] = 0
+        manager.live.playhead.trackProgress[i] = 0
         if !manager.tracks.contains(where: { $0.isPlaying }) {
             manager.metronome.stop()
             manager.isPlaying = false
@@ -206,7 +206,7 @@ final class TransportController {
         for i in 0..<manager.tracks.count {
             if i < playerNodes.count { playerNodes[i].stop() }
             manager.tracks[i].isPlaying = false
-            manager.live.trackProgress[i] = 0
+            manager.live.playhead.trackProgress[i] = 0
         }
         manager.isPlaying = false
         manager.status = "Stopped"
@@ -261,7 +261,7 @@ final class TransportController {
             trackBuffers[i] = nil
             if !manager.tracks[i].clips.isEmpty { loadTrackBuffer(i) }
             manager.tracks[i].isPlaying = false
-            manager.live.trackProgress[i] = 0
+            manager.live.playhead.trackProgress[i] = 0
         }
         manager.isPlaying = false
         refreshTrackMixers()
@@ -374,7 +374,7 @@ final class TransportController {
             manager.status = "No clip to split on TRK \(String(format: "%02d", trackIndex + 1))"
             return
         }
-        let progress = manager.live.trackProgress[trackIndex]
+        let progress = manager.live.playhead.trackProgress[trackIndex]
         guard progress > 0.001 && progress < 0.999 else {
             manager.status = "Move playhead inside clip to split"
             return

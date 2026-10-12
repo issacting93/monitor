@@ -465,7 +465,7 @@ struct WaveformLaneView: View {
     let index: Int
     let track: TrackInfo
     @ObservedObject var audio: AudioManager
-    @ObservedObject var live: LiveState
+    @ObservedObject var playhead: PlayheadState
     let totalBars: Int
     let secsPerBar: Double
     let laneWidth: CGFloat
@@ -540,7 +540,7 @@ struct WaveformLaneView: View {
                 if track.isPlaying {
                     let lastClip = track.clips.last
                     let clipDur = lastClip?.duration ?? 1
-                    let playX = CGFloat(live.trackProgress[index]) * CGFloat(clipDur / secsPerBar) * barWidth
+                    let playX = CGFloat(playhead.trackProgress[index]) * CGFloat(clipDur / secsPerBar) * barWidth
                     Rectangle()
                         .fill(Theme.textPrimary)
                         .frame(width: 1)
@@ -594,7 +594,7 @@ struct TrackControlsView: View {
     let index: Int
     let track: TrackInfo
     @ObservedObject var audio: AudioManager
-    @ObservedObject var live: LiveState
+    @ObservedObject var trackMeters: TrackMeterState
 
     private var color: Color { Theme.trackColor(index) }
 
@@ -660,7 +660,7 @@ struct TrackControlsView: View {
                 .frame(width: 32, alignment: .trailing)
 
             GeometryReader { geo in
-                let lvl = index < live.trackLevels.count ? live.trackLevels[index] : 0
+                let lvl = index < trackMeters.levels.count ? trackMeters.levels[index] : 0
                 ZStack(alignment: .leading) {
                     Rectangle().fill(Theme.surfaceInset)
                     Rectangle()
@@ -731,7 +731,12 @@ struct BarRulerView: View {
 
 struct LoopGridView: View {
     @ObservedObject var audio: AudioManager
-    @ObservedObject var live: LiveState
+    /// The per-frame streams are handed down to the small observing children below;
+    /// this view deliberately observes none of them, so its body — the ruler, eight
+    /// track headers, eight lanes, eight control strips and the zoom bar — is not
+    /// re-evaluated on every 60 Hz display tick.
+    let playhead: PlayheadState
+    let trackMeters: TrackMeterState
 
     private var secsPerBar: Double { 240.0 / audio.metronomeBPM }
     private var totalBars: Int {
@@ -739,12 +744,6 @@ struct LoopGridView: View {
         let barsFromClips = maxDur > 0 ? Int(ceil(maxDur / secsPerBar)) : 0
         let raw = max(8, barsFromClips + 4)
         return ((raw + 3) / 4) * 4
-    }
-
-    // Quantized playhead tick for driving scroll-follow (~20 updates/loop)
-    private var playheadTick: Int {
-        guard let idx = audio.tracks.firstIndex(where: { $0.isPlaying && !$0.clips.isEmpty }) else { return 0 }
-        return Int(live.trackProgress[idx] * 20)
     }
 
     var body: some View {
@@ -847,7 +846,7 @@ struct LoopGridView: View {
                                 let trk = audio.tracks[i]
                                 let anySolo = audio.tracks.contains { $0.solo }
                                 let audible = anySolo ? trk.solo : !trk.muted
-                                WaveformLaneView(index: i, track: trk, audio: audio, live: live,
+                                WaveformLaneView(index: i, track: trk, audio: audio, playhead: playhead,
                                                  totalBars: totalBars, secsPerBar: secsPerBar,
                                                  laneWidth: laneWidth)
                                     .padding(.vertical, 6)
@@ -856,23 +855,24 @@ struct LoopGridView: View {
                             }
 
                             // Invisible anchor at the playhead position for scroll-to
-                            let phFrac = playheadFraction()
-                            Color.clear
-                                .frame(width: 1, height: 1)
-                                .id("playhead_anchor")
-                                .offset(x: CGFloat(phFrac) * laneWidth - laneWidth / 2)
+                            PlayheadAnchorView(playhead: playhead, tracks: audio.tracks,
+                                               totalBars: totalBars, secsPerBar: secsPerBar,
+                                               laneWidth: laneWidth)
                         }
                     }
                     // Pin the middle column to the exact remaining width. The horizontal
                     // ScrollView otherwise reports a smaller intrinsic width, so the row
                     // stops short of the right edge and the track controls float left of it.
                     .frame(width: availableW)
-                    .onChange(of: playheadTick) {
-                        guard audio.isPlaying && audio.playheadFollow && audio.timelineZoom > 1.0 else { return }
-                        withAnimation(.easeInOut(duration: 0.35)) {
-                            proxy.scrollTo("playhead_anchor", anchor: .center)
-                        }
-                    }
+                    // Zero-size: exists only to own the 60 Hz scroll-follow trigger, so
+                    // LoopGridView's own body never reads the playhead. Inside the reader
+                    // so the proxy is in scope.
+                    .overlay(
+                        PlayheadScrollFollower(playhead: playhead, tracks: audio.tracks,
+                                               isPlaying: audio.isPlaying,
+                                               followEnabled: audio.playheadFollow && audio.timelineZoom > 1.0,
+                                               proxy: proxy)
+                    )
                     .onChange(of: audio.isPlaying) {
                         if audio.isPlaying && audio.playheadFollow && audio.timelineZoom > 1.0 {
                             withAnimation(.easeInOut(duration: 0.3)) {
@@ -890,7 +890,8 @@ struct LoopGridView: View {
                         let trk = audio.tracks[i]
                         let anySolo = audio.tracks.contains { $0.solo }
                         let audible = anySolo ? trk.solo : !trk.muted
-                        TrackControlsView(index: i, track: trk, audio: audio, live: live)
+                        TrackControlsView(index: i, track: trk, audio: audio,
+                                          trackMeters: trackMeters)
                             .frame(height: 52)
                             .padding(.vertical, 6)
                             .opacity(audible ? 1 : 0.32)
@@ -902,11 +903,63 @@ struct LoopGridView: View {
         }
     }
 
-    private func playheadFraction() -> Double {
-        guard let idx = audio.tracks.firstIndex(where: { $0.isPlaying && !$0.clips.isEmpty }),
-              let lastClip = audio.tracks[idx].clips.last else { return 0 }
+}
+
+// ── LoopGrid 60 Hz children ─────────────────────────────────────────────────
+//
+// These exist purely so LoopGridView's body — eight headers, eight lanes, eight
+// control strips and the ruler — is not re-evaluated on every display tick. Each
+// observes PlayheadState itself and reads nothing else that updates at 60 Hz.
+
+/// The invisible scroll-to target sitting at the playhead's x position. Its
+/// `.id` is what `PlayheadScrollFollower` scrolls to.
+private struct PlayheadAnchorView: View {
+    @ObservedObject var playhead: PlayheadState
+    let tracks: [TrackInfo]
+    let totalBars: Int
+    let secsPerBar: Double
+    let laneWidth: CGFloat
+
+    /// Playhead position as a fraction of the whole timeline. Playback decodes a
+    /// track's last clip only, so that clip's progress is scaled into the timeline.
+    private var fraction: Double {
+        guard let idx = tracks.firstIndex(where: { $0.isPlaying && !$0.clips.isEmpty }),
+              let lastClip = tracks[idx].clips.last, totalBars > 0 else { return 0 }
         let clipBars = lastClip.duration / secsPerBar
-        return live.trackProgress[idx] * clipBars / Double(totalBars)
+        return playhead.trackProgress[idx] * clipBars / Double(totalBars)
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(width: 1, height: 1)
+            .id("playhead_anchor")
+            .offset(x: CGFloat(fraction) * laneWidth - laneWidth / 2)
+    }
+}
+
+/// Zero-size driver for scroll-follow. Quantizes the playhead to ~20 steps per
+/// loop so `.onChange` fires a handful of times per second instead of 60.
+private struct PlayheadScrollFollower: View {
+    @ObservedObject var playhead: PlayheadState
+    let tracks: [TrackInfo]
+    let isPlaying: Bool
+    let followEnabled: Bool
+    let proxy: ScrollViewProxy
+
+    private var tick: Int {
+        guard let idx = tracks.firstIndex(where: { $0.isPlaying && !$0.clips.isEmpty }) else { return 0 }
+        return Int(playhead.trackProgress[idx] * 20)
+    }
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .onChange(of: tick) {
+                guard isPlaying && followEnabled else { return }
+                withAnimation(.easeInOut(duration: 0.35)) {
+                    proxy.scrollTo("playhead_anchor", anchor: .center)
+                }
+            }
     }
 }
 
@@ -1459,7 +1512,7 @@ struct ReelView: View {
 
 struct ArrangeHeadUnit: View {
     @ObservedObject var audio: AudioManager
-    @ObservedObject var live: LiveState
+    @ObservedObject var meters: MeterState
 
     private var timerText: String {
         let t = audio.recordingDuration
@@ -1613,9 +1666,9 @@ struct ArrangeHeadUnit: View {
                             .tracking(3)
                             .foregroundColor(Theme.textSecondary)
                         HStack(alignment: .firstTextBaseline, spacing: 4) {
-                            Text(live.peakDB.isFinite ? String(format: "%.1f", live.peakDB) : "\u{2212}\u{221E}")
+                            Text(meters.peakDB.isFinite ? String(format: "%.1f", meters.peakDB) : "\u{2212}\u{221E}")
                                 .font(.system(size: 28, weight: .light, design: .monospaced))
-                                .foregroundColor(live.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
+                                .foregroundColor(meters.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
                                 .monospacedDigit()
                             Text("dB")
                                 .font(.system(size: 12, weight: .regular, design: .monospaced))
@@ -1635,8 +1688,8 @@ struct ArrangeHeadUnit: View {
 
                 // Vertical L/R meters
                 HStack(spacing: 4) {
-                    VerticalMeter(label: "L", level: live.levelL, peak: live.peakL)
-                    VerticalMeter(label: "R", level: live.levelR, peak: live.peakR)
+                    VerticalMeter(label: "L", level: meters.levelL, peak: meters.peakL)
+                    VerticalMeter(label: "R", level: meters.levelR, peak: meters.peakR)
                     VStack {
                         Text("0").frame(maxHeight: .infinity, alignment: .top)
                         Text("-6").frame(maxHeight: .infinity)
@@ -1676,7 +1729,7 @@ struct ArrangeHeadUnit: View {
 
 struct MonitorView: View {
     @ObservedObject var audio: AudioManager
-    @ObservedObject var live: LiveState
+    @ObservedObject var meters: MeterState
 
     private var timerText: String {
         let t = audio.recordingDuration
@@ -1767,11 +1820,11 @@ struct MonitorView: View {
 
                     // Waveform bars
                     Path { path in
-                        let count = live.waveformSamples.count
+                        let count = meters.waveformSamples.count
                         guard count > 0 else { return }
                         let barWidth: CGFloat = 3
                         let spacing = geo.size.width / CGFloat(count)
-                        for (i, val) in live.waveformSamples.enumerated() {
+                        for (i, val) in meters.waveformSamples.enumerated() {
                             let x = CGFloat(i) * spacing + spacing / 2
                             let h = CGFloat(val) * (geo.size.height / 2.2)
                             let rect = CGRect(x: x - barWidth / 2, y: midY - h,
@@ -1798,8 +1851,8 @@ struct MonitorView: View {
             // Horizontal L/R meters
             HStack(spacing: 12) {
                 VStack(spacing: 4) {
-                    hMeter(label: "L", level: live.levelL, peak: live.peakL)
-                    hMeter(label: "R", level: live.levelR, peak: live.peakR)
+                    hMeter(label: "L", level: meters.levelL, peak: meters.peakL)
+                    hMeter(label: "R", level: meters.levelR, peak: meters.peakR)
                     // dB scale
                     GeometryReader { geo in
                         ZStack {
@@ -1821,9 +1874,9 @@ struct MonitorView: View {
                         .font(.system(size: 8, weight: .medium, design: .monospaced))
                         .tracking(2)
                         .foregroundColor(Theme.textTertiary)
-                    Text(live.peakDB.isFinite ? String(format: "%+.1f dB", live.peakDB) : "\u{2212}\u{221E} dB")
+                    Text(meters.peakDB.isFinite ? String(format: "%+.1f dB", meters.peakDB) : "\u{2212}\u{221E} dB")
                         .font(.system(size: 22, weight: .light, design: .monospaced))
-                        .foregroundColor(live.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
+                        .foregroundColor(meters.peakDB > -0.5 ? Theme.danger : Theme.textPrimary)
                         .monospacedDigit()
                 }
                 .frame(width: 110, alignment: .trailing)
