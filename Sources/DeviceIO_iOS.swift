@@ -60,13 +60,16 @@ final class AVAudioSessionDeviceProvider: AudioDeviceProviding {
         return session.currentRoute.inputs.first?.portName ?? "Input"
     }
 
-    func applyInputDevice(_ id: DeviceID, to engine: AVAudioEngine) {
+    func applyEngineDevices(input: DeviceID, output: DeviceID?, to engine: AVAudioEngine) -> String? {
         let session = AVAudioSession.sharedInstance()
-        guard id >= 1, let ports = session.availableInputs, Int(id) - 1 < ports.count else { return }
-        try? session.setPreferredInput(ports[Int(id) - 1])
+        guard input >= 1, let ports = session.availableInputs, Int(input) - 1 < ports.count else {
+            return "Selected input unavailable — check the USB connection"
+        }
+        try? session.setPreferredInput(ports[Int(input) - 1])
+        return nil
     }
 
-    func applyOutputDevice(_ id: DeviceID, to engine: AVAudioEngine) {}
+    func releaseEngineDevice() {}
 
     func startObserving(_ onChange: @escaping (DeviceChange) -> Void) {
         let center = NotificationCenter.default

@@ -113,9 +113,16 @@ final class TransportController {
 
     func startTrackLoop(_ i: Int) {
         guard manager.isMonitoring, i < playerNodes.count else { return }
+        // An empty track has nothing to play. Bailing here also stops the
+        // load → start → load recursion below from spinning forever on an empty
+        // track (which previously caused a stack overflow).
+        guard !manager.tracks[i].clips.isEmpty else { return }
         if trackBuffers[i] == nil {
             // Buffer not decoded yet — load it off-main, then start once it's ready.
-            loadTrackBuffer(i) { [weak self] in self?.startTrackLoop(i) }
+            loadTrackBuffer(i) { [weak self] ok in
+                if ok { self?.startTrackLoop(i) }
+                else { self?.manager.status = "Could not load clip for TRK \(String(format: "%02d", i + 1))" }
+            }
             return
         }
         guard let buffer = trackBuffers[i] else { return }
@@ -166,9 +173,16 @@ final class TransportController {
             let group = DispatchGroup()
             for i in missing {
                 group.enter()
-                loadTrackBuffer(i) { group.leave() }
+                loadTrackBuffer(i) { _ in group.leave() }
             }
-            group.notify(queue: .main) { [weak self] in self?.playAll() }
+            group.notify(queue: .main) { [weak self] in
+                guard let self else { return }
+                // Re-enter only if every buffer actually loaded; otherwise the loop
+                // would retry unreadable clips forever.
+                let stillMissing = missing.filter { self.trackBuffers[$0] == nil }
+                if stillMissing.isEmpty { self.playAll() }
+                else { self.manager.status = "Could not load \(stillMissing.count) clip(s)" }
+            }
             return
         }
         for i in 0..<manager.tracks.count where !manager.tracks[i].clips.isEmpty {
@@ -607,9 +621,9 @@ final class TransportController {
     // MB), then publishes the buffer back on main. `completion` runs on the main
     // thread once the buffer is ready (or immediately if there was nothing to load),
     // so playback callers can defer scheduling until the read finishes.
-    func loadTrackBuffer(_ i: Int, completion: (() -> Void)? = nil) {
+    func loadTrackBuffer(_ i: Int, completion: ((Bool) -> Void)? = nil) {
         guard i < manager.tracks.count, let lastClip = manager.tracks[i].clips.last else {
-            completion?()
+            completion?(false)
             return
         }
         let url = lastClip.url
@@ -625,7 +639,7 @@ final class TransportController {
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let loaded, i < self.trackBuffers.count { self.trackBuffers[i] = loaded }
-                completion?()
+                completion?(loaded != nil)
             }
         }
     }

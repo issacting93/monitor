@@ -33,8 +33,14 @@ protocol AudioDeviceProviding: AnyObject {
 
     func loadDevices() -> (inputs: [AudioDevice], outputs: [AudioDevice])
     func displayName(for id: DeviceID) -> String
-    func applyInputDevice(_ id: DeviceID, to engine: AVAudioEngine)
-    func applyOutputDevice(_ id: DeviceID, to engine: AVAudioEngine)
+    /// Point the engine's (single, shared) device at `input`, routing output to
+    /// `output` when the two differ (macOS builds an aggregate device for this).
+    /// Returns a human-readable reason when the requested routing could not be
+    /// applied (e.g. the aggregate device could not be created), or nil on success.
+    @discardableResult
+    func applyEngineDevices(input: DeviceID, output: DeviceID?, to engine: AVAudioEngine) -> String?
+    /// Release device resources created by `applyEngineDevices` (e.g. an aggregate).
+    func releaseEngineDevice()
 
     func startObserving(_ onChange: @escaping (DeviceChange) -> Void)
     func stopObserving()

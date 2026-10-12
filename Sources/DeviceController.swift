@@ -88,7 +88,8 @@ final class DeviceController {
     func switchOutput(to id: DeviceID) {
         guard io.outputSelectionSupported else { return }
         manager.selectedOutputID = id
-        // The engine is rebuilt below; start() applies the selected output device.
+        // On macOS the engine's input and output are the same AUHAL, so the output
+        // device follows the selected INPUT device — the OUT picker only labels it.
         if manager.isMonitoring { manager.stopMonitoring(); manager.startMonitoring() }
     }
 

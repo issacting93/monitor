@@ -93,10 +93,11 @@ final class EngineController {
         let eng = AVAudioEngine()
         // Point the engine's input at the chosen device without changing the system
         // default input (macOS AUHAL pin) / set the session's preferred input (iOS).
-        m.device.io.applyInputDevice(inID, to: eng)
-        // Route output to the chosen device instead of always following the system
-        // default (so the OUT picker actually works). No-op where unsupported.
-        if let outID = m.selectedOutputID { m.device.io.applyOutputDevice(outID, to: eng) }
+        // The engine has ONE shared AUHAL, so it takes a single device. When the
+        // selected input and output differ, the provider builds a private aggregate
+        // device (input + output) and pins the AUHAL to that — pinning it straight at a
+        // mic-only input instead would leave no usable output (silence).
+        let routingWarning = m.device.io.applyEngineDevices(input: inID, output: m.selectedOutputID, to: eng)
         let hwFmt = eng.inputNode.inputFormat(forBus: 0)
 
         guard hwFmt.sampleRate > 0, hwFmt.channelCount > 0 else {
@@ -201,7 +202,7 @@ final class EngineController {
         m.metronome.attach(player: metPlayer, mixer: metMix, sampleRate: stereoFmt.sampleRate)
         m.isMonitoring = true
 
-        m.status = "\(inDev.name) → \(m.device.io.currentOutputName)"
+        m.status = routingWarning ?? "\(inDev.name) → \(m.device.io.currentOutputName)"
         m.sampleRateString = "\(Int(hwFmt.sampleRate / 1000)) kHz · 24-bit · Stereo"
         m.meter.startDisplayTimer()
 
@@ -292,11 +293,15 @@ final class EngineController {
         let m = manager
         kernelEpoch &+= 1        // discard any in-flight kernel insert for this graph
         pendingKernels.removeAll()
+        // Stop the engine BEFORE releasing its device: the AUHAL is still pinned to
+        // the aggregate, and destroying the device underneath a running unit leaves
+        // it in an undefined state (which can make the next start() fail).
+        engine?.stop()
         m.metronome.detach()
         m.meter.detach()
         m.recorder.detach()
-        engine?.stop()
         m.effects.clearChainNodes()
+        m.device.io.releaseEngineDevice()   // now safe to tear down the aggregate
         engine = nil
         outMixer = nil; dryTapMixer = nil; masterMixer = nil; masterLimiterNode = nil
         m.transport.detach()

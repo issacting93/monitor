@@ -328,6 +328,15 @@ struct TopBar: View {
                         .foregroundColor(statusColor)
                 }
 
+                // The engine's status/routing string (or a failure reason). Without
+                // this the app fails silently — e.g. "No usable input format".
+                Text(audio.status.uppercased())
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .foregroundColor(audio.isMonitoring ? Theme.textSecondary : Theme.danger)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(maxWidth: 300, alignment: .leading)
+
                 Text(audio.sampleRateString.uppercased())
                     .font(.system(size: 10, weight: .regular, design: .monospaced))
                     .tracking(2)
