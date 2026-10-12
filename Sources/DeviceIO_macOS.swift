@@ -44,12 +44,16 @@ final class CoreAudioDeviceProvider: AudioDeviceProviding {
         // report it, so the silent "monitoring the wrong device" case can't recur.
         guard let out = output, out != input else {
             setEngineInputDevice(engine, input)
+            ensureMinimumIOBufferFrames(input)
             return nil
         }
         guard let agg = createAggregateDevice(input: input, output: out) else {
             return "Couldn't route \(nameOfDevice(input)) → \(nameOfDevice(out)) — using system default I/O"
         }
         aggregateID = agg
+        // An input-only device (a mic) forces this aggregate path; its small default
+        // buffer can starve the graph and stutter. Raise it before the engine starts.
+        ensureMinimumIOBufferFrames(agg)
         setEngineInputDevice(engine, agg)
         // The input sub-device is listed first (required for input to appear), so a
         // full-duplex input device's output channels sit first in the aggregate and the
