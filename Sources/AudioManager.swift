@@ -43,6 +43,10 @@ class AudioManager: ObservableObject {
 
     // Trim editor
     @Published var trimmingTrack: Int? = nil
+    /// The clip the open editor is trimming. Stored alongside the track because
+    /// `applyTrim`'s file work runs off-main: by the time it lands the user can have
+    /// moved the selection, and the trim must still replace the clip it was opened on.
+    @Published var trimClipID: UUID? = nil
     @Published var trimStart: Double = 0
     @Published var trimEnd: Double = 1
     @Published var trimPeaks: [Double] = []
@@ -84,6 +88,17 @@ class AudioManager: ObservableObject {
     @Published var recordings: [Recording] = []
     @Published var tracks: [TrackInfo] = (0..<Theme.trackCount).map { TrackInfo(id: $0) }
     @Published var selectedTrack: Int = 0
+
+    /// The take the edit buttons act on, held as an id rather than an index and kept
+    /// deliberately outside `tracks` so selecting a take is never an undo step.
+    ///
+    /// An id, because every constructive op (trim, split, duplicate, record, import)
+    /// installs a brand-new `TrackClip` with a fresh UUID — an index would silently
+    /// point at a different take — while undo and redo swap whole snapshots holding the
+    /// very same structs, so the id rides through them untouched. The ops that install a
+    /// clip re-point it, and only while the user hasn't moved the selection since.
+    @Published var selectedClipID: UUID? = nil
+
     @Published var isPlaying = false
 
     // Project persistence
@@ -94,6 +109,42 @@ class AudioManager: ObservableObject {
     // Undo/Redo (state + logic live in TransportController)
     var canUndo: Bool { transport.canUndo }
     var canRedo: Bool { transport.canRedo }
+
+    // MARK: - Clip Selection
+
+    /// The index of the clip an edit should act on for `trackIndex`: the selected take
+    /// when that resolves on this track, otherwise the track's last take — the behaviour
+    /// every edit had before selection existed, so an empty or stale selection never
+    /// changes what an edit does. Nil only when the track holds no clips at all.
+    ///
+    /// Resolution happens here, at use time, rather than being cached: the selection can
+    /// go stale in ways nothing local to a view can see (undo, redo, a project load, a
+    /// trim replacing the clip under it) and every one of those has to fall back cleanly.
+    /// Views that show which take is current must resolve through this too, or the
+    /// highlight would sit on a different take than the one the edits act on.
+    func editTargetIndex(on trackIndex: Int) -> Int? {
+        guard trackIndex >= 0, trackIndex < tracks.count else { return nil }
+        let clips = tracks[trackIndex].clips
+        guard !clips.isEmpty else { return nil }
+        if trackIndex == selectedTrack, let id = selectedClipID,
+           let i = clips.firstIndex(where: { $0.id == id }) {
+            return i
+        }
+        return clips.count - 1
+    }
+
+    /// Whether the selected track has a take for the edit buttons to act on.
+    var hasEditableClip: Bool { editTargetIndex(on: selectedTrack) != nil }
+
+    /// Selects take `number` (1-based) on the selected track, for the ⌘1–⌘8 shortcuts.
+    /// A number past the end does nothing, so a shortcut can't wipe a selection the
+    /// user made by clicking.
+    func selectClip(number: Int) {
+        guard selectedTrack >= 0, selectedTrack < tracks.count else { return }
+        let clips = tracks[selectedTrack].clips
+        guard number >= 1, number <= clips.count else { return }
+        selectedClipID = clips[number - 1].id
+    }
 
     // Master limiter
     @Published var masterLimiterEnabled: Bool = true

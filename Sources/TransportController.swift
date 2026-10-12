@@ -102,6 +102,34 @@ final class TransportController {
         for i in 0..<loadGenerations.count { loadGenerations[i] += 1 }
     }
 
+    /// Moves the selection onto a clip an edit has just installed. Skipped when the edit
+    /// ran against a track other than the selected one: the selection is only ever read
+    /// for the selected track, so naming a take elsewhere would leave this track's own
+    /// selection dangling and gain nothing. Reachable from outside for
+    /// `RecordingController`, whose finished take is installed the same way.
+    func selectInstalledClip(_ id: UUID, on trackIndex: Int) {
+        guard trackIndex == manager.selectedTrack else { return }
+        manager.selectedClipID = id
+    }
+
+    /// Moves the selection onto a clip an edit has just installed — unless the user has
+    /// picked a different take since that edit was dispatched.
+    ///
+    /// These applies run off-main, so a click that lands while one is in flight is the
+    /// newer instruction and must win: re-pointing regardless would silently undo it, and
+    /// the next TRIM or DUP would then act on a take the user had moved away from.
+    ///
+    /// Passing the selection as it was when the edit started is what makes "nothing was
+    /// selected" still re-point, which is what keeps pre-selection behaviour intact: a
+    /// split's second half, a duplicate's copy and a new take are all installed at or
+    /// after the position an empty selection falls back to, so the re-point is a no-op in
+    /// effect — but it leaves the id in place for the ops that replace a clip rather than
+    /// append one.
+    func followSelection(ifUnchanged previous: UUID?, to newID: UUID, on trackIndex: Int) {
+        guard manager.selectedClipID == previous else { return }
+        selectInstalledClip(newID, on: trackIndex)
+    }
+
     /// Resolves a clip's current position on a track. Edits capture the clip's `id`
     /// rather than its index before doing their work, because the array can be
     /// reordered or replaced while that work runs.
@@ -343,6 +371,10 @@ final class TransportController {
             trackBuffers[i] = nil
         }
         manager.recordings.removeAll()
+        // Every clip just went away, so a selection could only name one that no longer
+        // exists. Undo will bring the clips back, but not the selection — a stale id
+        // would silently resolve to some other take.
+        manager.selectedClipID = nil
         manager.status = "All tracks cleared"
     }
 
@@ -406,7 +438,9 @@ final class TransportController {
     // MARK: - Trim Editor
 
     func openTrimEditor(_ trackIndex: Int) {
-        guard trackIndex < manager.tracks.count, let clip = manager.tracks[trackIndex].clips.last else { return }
+        guard trackIndex < manager.tracks.count,
+              let ci = manager.editTargetIndex(on: trackIndex) else { return }
+        let clip = manager.tracks[trackIndex].clips[ci]
         if manager.tracks[trackIndex].isPlaying { stopTrackLoop(trackIndex) }
         // The editor opens on the clip's duration straight away; the waveform needs a
         // full read of the file, so it arrives off-main a moment later.
@@ -415,6 +449,9 @@ final class TransportController {
         manager.trimStart = 0
         manager.trimEnd = 1
         manager.trimmingTrack = trackIndex
+        // Pin the clip now: the selection can move while the editor is open, and APPLY
+        // must trim the take the waveform on screen belongs to.
+        manager.trimClipID = clip.id
         trimSession += 1
         let session = trimSession
         let url = clip.url
@@ -435,19 +472,37 @@ final class TransportController {
         // so this is what makes the cancel take effect.
         trimSession += 1
         manager.trimmingTrack = nil
+        manager.trimClipID = nil
         manager.trimPeaks = []
     }
 
     func applyTrim() {
+        // Undo, redo or a project load can replace the clip set while the editor is open,
+        // leaving `trimClipID` naming a clip that is gone. Report that and close, rather
+        // than returning silently: the editor would otherwise stay on screen showing a
+        // waveform for a clip that no longer exists, with a live-looking APPLY that can
+        // be pressed forever and never does anything.
         guard let ti = manager.trimmingTrack, ti < manager.tracks.count,
-              let clip = manager.tracks[ti].clips.last else { return }
+              let clipID = manager.trimClipID,
+              let ci0 = indexOfClip(clipID, on: ti) else {
+            if manager.trimmingTrack != nil {
+                manager.trimmingTrack = nil
+                manager.trimClipID = nil
+                manager.trimPeaks = []
+                trimSession += 1
+                manager.status = "Trim closed — the take it was opened on is gone"
+            }
+            return
+        }
+        let clip = manager.tracks[ti].clips[ci0]
         // Capture what the work needs by value, plus the identities to re-check it
         // against before applying: the editor session (the user may cancel while this
-        // runs), the clip's id (its index is not stable) and the edit epoch (the whole
-        // clip set can be replaced under us).
+        // runs), the clip's id (its index is not stable), the edit epoch (the whole
+        // clip set can be replaced under us) and the selection (re-pointed below, but
+        // only if the user has not moved it since).
         let session = trimSession
         let epoch = editEpoch
-        let clipID = clip.id
+        let previousSelection = manager.selectedClipID
         let srcURL = clip.url
         let startFrac = manager.trimStart
         let endFrac = manager.trimEnd
@@ -508,8 +563,13 @@ final class TransportController {
                 return
             }
             self.pushUndo()
-            m.tracks[ti].clips[ci] = TrackClip(url: trimmed.url, duration: trimmed.duration,
-                                               peaks: trimmed.peaks)
+            let replacement = TrackClip(url: trimmed.url, duration: trimmed.duration,
+                                        peaks: trimmed.peaks)
+            m.tracks[ti].clips[ci] = replacement
+            // The trimmed take is a new identity, so a selection still naming the clip it
+            // replaced has to move onto it, or it would dangle and resolve to the track's
+            // last take instead. A selection the user made while this ran is left alone.
+            self.followSelection(ifUnchanged: previousSelection, to: replacement.id, on: ti)
             self.registerSessionFile(trimmed.url)   // now referenced, so it can be swept again
             self.trackBuffers[ti] = nil
             self.loadTrackBuffer(ti)
@@ -517,6 +577,7 @@ final class TransportController {
             // it can't land on whatever the user opens next.
             self.trimSession += 1
             m.trimmingTrack = nil
+            m.trimClipID = nil
             m.trimPeaks = []
             m.status = "Trimmed → \(trimmed.url.lastPathComponent)"
         }
@@ -529,6 +590,19 @@ final class TransportController {
             manager.status = "No clip to split on TRK \(String(format: "%02d", trackIndex + 1))"
             return
         }
+        // The playhead is a fraction of the track's *last* clip — the only one the engine
+        // decodes and plays — so a split is only meaningful there. With an earlier take
+        // selected, say so rather than cutting a clip the playhead does not describe.
+        // (Splitting a take that isn't playing needs a playhead that stays put: that's U2.)
+        let lastIndex = manager.tracks[trackIndex].clips.count - 1
+        // Non-nil: the guard above pins the track in range and its clips non-empty, so
+        // this is the selected take — or, by `editTargetIndex`'s own fallback, the last.
+        let target = manager.editTargetIndex(on: trackIndex) ?? lastIndex
+        guard target == lastIndex else {
+            manager.status = "Split works on the loaded take — select TAKE \(lastIndex + 1)"
+            return
+        }
+
         // Read the split point first: stopping the loop below resets this track's
         // playhead to zero, and a running loop would keep advancing it.
         let progress = manager.live.playhead.trackProgress[trackIndex]
@@ -538,8 +612,8 @@ final class TransportController {
         }
 
         let epoch = editEpoch
-        let clipIndex = manager.tracks[trackIndex].clips.count - 1
-        let clip = manager.tracks[trackIndex].clips[clipIndex]
+        let previousSelection = manager.selectedClipID
+        let clip = manager.tracks[trackIndex].clips[target]
         let clipID = clip.id
         let srcURL = clip.url
         let wasPlaying = manager.tracks[trackIndex].isPlaying
@@ -629,11 +703,17 @@ final class TransportController {
             }
 
             self.pushUndo()
+            let clipA = TrackClip(url: partA.url, duration: partA.duration, peaks: partA.peaks)
+            let clipB = TrackClip(url: partB.url, duration: partB.duration, peaks: partB.peaks)
             m.tracks[trackIndex].clips.remove(at: ci)
-            m.tracks[trackIndex].clips.insert(
-                TrackClip(url: partA.url, duration: partA.duration, peaks: partA.peaks), at: ci)
-            m.tracks[trackIndex].clips.insert(
-                TrackClip(url: partB.url, duration: partB.duration, peaks: partB.peaks), at: ci + 1)
+            m.tracks[trackIndex].clips.insert(clipA, at: ci)
+            m.tracks[trackIndex].clips.insert(clipB, at: ci + 1)
+            // Follow the second half, not the first. Split only ever cuts the take the
+            // playhead describes, which is the track's last, so B is the new last clip —
+            // the same take the fallback would target. Selecting A instead would leave
+            // SPLIT's own precondition (target == last) false, so a second ⌘T would refuse
+            // rather than cut again, and DUP would act on a clip it never used to.
+            self.followSelection(ifUnchanged: previousSelection, to: clipB.id, on: trackIndex)
             self.registerSessionFile(partA.url)   // now referenced, so they can be swept again
             self.registerSessionFile(partB.url)
 
@@ -650,7 +730,10 @@ final class TransportController {
             return
         }
         let epoch = editEpoch
-        let ci = clipIndex ?? (manager.tracks[trackIndex].clips.count - 1)
+        let previousSelection = manager.selectedClipID
+        // No explicit index means the selected take, falling back to the last one.
+        let ci = clipIndex ?? manager.editTargetIndex(on: trackIndex)
+            ?? (manager.tracks[trackIndex].clips.count - 1)
         guard ci >= 0 && ci < manager.tracks[trackIndex].clips.count else { return }
         let clip = manager.tracks[trackIndex].clips[ci]
         let clipID = clip.id
@@ -681,10 +764,12 @@ final class TransportController {
                 return
             }
             self.pushUndo()
-            // The copy keeps the original's fades, and is the clip that ends up selected.
-            m.tracks[trackIndex].clips.insert(
-                TrackClip(url: copy.url, duration: copy.duration, peaks: copy.peaks,
-                          fadeIn: clip.fadeIn, fadeOut: clip.fadeOut), at: at + 1)
+            // The copy keeps the original's fades, and is the clip that ends up selected:
+            // a duplicated take is the one the user now wants to work on.
+            let copyClip = TrackClip(url: copy.url, duration: copy.duration, peaks: copy.peaks,
+                                     fadeIn: clip.fadeIn, fadeOut: clip.fadeOut)
+            m.tracks[trackIndex].clips.insert(copyClip, at: at + 1)
+            self.followSelection(ifUnchanged: previousSelection, to: copyClip.id, on: trackIndex)
             self.registerSessionFile(copy.url)   // now referenced, so it can be swept again
             self.trackBuffers[trackIndex] = nil
             self.loadTrackBuffer(trackIndex)
@@ -696,10 +781,14 @@ final class TransportController {
     // MARK: - Export
 
     func exportTrack(_ trackIndex: Int) {
-        guard trackIndex < manager.tracks.count, let clip = manager.tracks[trackIndex].clips.last else {
+        // The selected take, like TRIM and DUP — the FX header names this same clip, so
+        // exporting the last take while it says otherwise would contradict the UI.
+        guard trackIndex < manager.tracks.count,
+              let ci = manager.editTargetIndex(on: trackIndex) else {
             manager.status = "No clip to export on TRK \(String(format: "%02d", trackIndex + 1))"
             return
         }
+        let clip = manager.tracks[trackIndex].clips[ci]
         #if os(macOS)
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.wav]
@@ -730,6 +819,7 @@ final class TransportController {
         let trackDir = manager.saveLocation.appendingPathComponent("Track \(String(format: "%02d", trackIndex + 1))")
         let destURL = trackDir.appendingPathComponent(url.lastPathComponent)
         let epoch = editEpoch
+        let previousSelection = manager.selectedClipID
 
         manager.runOffMain(busy: "Importing…") { () -> EditOutcome in
             let fm = FileManager.default
@@ -762,8 +852,10 @@ final class TransportController {
                 return
             }
             self.pushUndo()
-            m.tracks[trackIndex].clips.append(
-                TrackClip(url: imported.url, duration: imported.duration, peaks: imported.peaks))
+            let importedClip = TrackClip(url: imported.url, duration: imported.duration,
+                                         peaks: imported.peaks)
+            m.tracks[trackIndex].clips.append(importedClip)
+            self.followSelection(ifUnchanged: previousSelection, to: importedClip.id, on: trackIndex)
             self.loadTrackBuffer(trackIndex)
             m.projectDirty = true
             m.status = "Imported \(url.lastPathComponent) → TRK \(String(format: "%02d", trackIndex + 1))"

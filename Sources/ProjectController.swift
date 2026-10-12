@@ -242,6 +242,9 @@ final class ProjectController {
             newTracks[item.trackIndex].clips.append(item.clip)
         }
         m.tracks = newTracks
+        // The loaded project's clips are all new identities, so the previous selection
+        // cannot resolve and is dropped rather than left to fall back silently.
+        m.selectedClipID = nil
         m.transport.resetTrackBuffers()
 
         // Load track buffers for tracks that have clips

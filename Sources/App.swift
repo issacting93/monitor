@@ -58,6 +58,17 @@ final class KeyboardShortcutMonitor {
             case 26 where noMod: DispatchQueue.main.async { audio.selectedTrack = 6 }; return nil
             case 28 where noMod: DispatchQueue.main.async { audio.selectedTrack = 7 }; return nil
 
+            // Cmd+1–8 — Select take N on the selected track (the plain numbers above are
+            // taken by track selection, so the modifier is what distinguishes them)
+            case 18 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 1) }; return nil
+            case 19 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 2) }; return nil
+            case 20 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 3) }; return nil
+            case 21 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 4) }; return nil
+            case 23 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 5) }; return nil
+            case 22 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 6) }; return nil
+            case 26 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 7) }; return nil
+            case 28 where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 8) }; return nil
+
             // Cmd+Z — Undo
             case 6 where hasCmd && !flags.contains(.shift):
                 DispatchQueue.main.async { audio.undo() }

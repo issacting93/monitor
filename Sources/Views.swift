@@ -503,10 +503,23 @@ struct WaveformLaneView: View {
                     let clipW = CGFloat(clipBars) * barWidth
                     let prevOffset = track.clips.prefix(ci).reduce(0.0) { $0 + $1.duration }
                     let clipX = CGFloat(prevOffset / secsPerBar) * barWidth
+                    // The take the edit buttons will act on, resolved the same way they
+                    // resolve it — not by comparing `selectedClipID` directly. A stale id
+                    // (undo replaced the clip it named) falls back to the last take for the
+                    // edits, so comparing ids here would leave nothing highlighted while
+                    // TRIM and DUP quietly acted on the last take.
+                    let isThisSelected = isSelected && audio.editTargetIndex(on: index) == ci
 
                     ZStack(alignment: .topLeading) {
+                        // Selected take, in the lane's own selected treatment one step
+                        // stronger: a full-strength border plus a faint accent wash.
+                        if isThisSelected {
+                            RoundedRectangle(cornerRadius: 4)
+                                .fill(Theme.accent.opacity(0.10))
+                        }
                         RoundedRectangle(cornerRadius: 4)
-                            .stroke(color.opacity(0.4), lineWidth: 1)
+                            .stroke(isThisSelected ? color : color.opacity(0.4),
+                                    lineWidth: isThisSelected ? 1.5 : 1)
                         Rectangle()
                             .fill(color)
                             .frame(height: 2)
@@ -533,6 +546,17 @@ struct WaveformLaneView: View {
                             .padding(.leading, 4).padding(.top, 2)
                     }
                     .frame(width: max(clipW - 2, 4), height: 50)
+                    .contentShape(Rectangle())
+                    // minimumDistance 0 so an ordinary click counts, and the drag reports
+                    // where in the clip it landed — the split point a later change needs.
+                    // macOS ScrollViews pan with the wheel, not with a mouse drag, so this
+                    // doesn't cost the lane its scrolling.
+                    .gesture(
+                        DragGesture(minimumDistance: 0).onEnded { _ in
+                            audio.selectedTrack = index
+                            audio.selectedClipID = clip.id
+                        }
+                    )
                     .offset(x: clipX + 1, y: 1)
                 }
 
@@ -813,12 +837,18 @@ struct LoopGridView: View {
                                     .fill(Theme.trackColor(i))
                                     .frame(width: 2, height: 30)
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(!trk.clips.isEmpty ? (trk.clips.last?.name ?? "CLIP") : "TRK \(String(format: "%02d", i + 1))")
+                                    Text(!trk.clips.isEmpty
+                                         ? (audio.editTargetIndex(on: i).map { trk.clips[$0].name } ?? "CLIP")
+                                         : "TRK \(String(format: "%02d", i + 1))")
                                         .font(.system(size: 12, weight: .medium, design: .monospaced))
                                         .tracking(1.5)
                                         .foregroundColor(Theme.textPrimary)
                                         .lineLimit(1)
-                                    Text(!trk.clips.isEmpty ? "TAKE \(trk.clips.count)" : "EMPTY")
+                                    // "n TAKES", not "TAKE n" — beside a lane that labels each
+                                    // take TAKE 1…n, a bare count reads as an index.
+                                    Text(!trk.clips.isEmpty
+                                         ? (trk.clips.count == 1 ? "1 TAKE" : "\(trk.clips.count) TAKES")
+                                         : "EMPTY")
                                         .font(.system(size: 9, weight: .regular, design: .monospaced))
                                         .tracking(2)
                                         .foregroundColor(Theme.textTertiary)
@@ -984,9 +1014,14 @@ struct SideEffectsPanelView: View {
     ]
     private func slotColor(_ i: Int) -> Color { slotColors[i % slotColors.count] }
 
+    /// The take an edit would act on, so this names the same clip TRIM / DUP / EXPORT
+    /// use rather than always the track's last one.
     private var selectedTrackName: String {
         let t = audio.tracks[audio.selectedTrack]
-        return t.clips.last?.name ?? "TRK \(String(format: "%02d", audio.selectedTrack + 1))"
+        guard let i = audio.editTargetIndex(on: audio.selectedTrack) else {
+            return "TRK \(String(format: "%02d", audio.selectedTrack + 1))"
+        }
+        return "TAKE \(i + 1) \u{00B7} \(t.clips[i].name)"
     }
 
     var body: some View {
@@ -1276,6 +1311,14 @@ struct SideEffectsPanelView: View {
 struct TransportBar: View {
     @ObservedObject var audio: AudioManager
 
+    /// The take the edit keys act on, out of the selected track's total. Resolved through
+    /// `editTargetIndex` so it agrees with the lane highlight and the FX header.
+    private var takeLabel: String {
+        let clips = audio.tracks[audio.selectedTrack].clips
+        guard let i = audio.editTargetIndex(on: audio.selectedTrack) else { return "EMPTY" }
+        return "TAKE \(i + 1)/\(clips.count)"
+    }
+
     var body: some View {
         HStack(spacing: 0) {
             // Left: selected track
@@ -1285,7 +1328,7 @@ struct TransportBar: View {
                     Text("TRK \(String(format: "%02d", audio.selectedTrack + 1))")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .tracking(2).foregroundColor(Theme.accent)
-                    Text("/ \(audio.tracks[audio.selectedTrack].clips.isEmpty ? "EMPTY" : "TAKE \(audio.tracks[audio.selectedTrack].clips.count)")")
+                    Text("/ \(takeLabel)")
                         .font(.system(size: 11, weight: .regular, design: .monospaced))
                         .tracking(2).foregroundColor(Theme.textTertiary)
                 }
@@ -1549,7 +1592,9 @@ struct ArrangeHeadUnit: View {
                             .tracking(3)
                             .foregroundColor(Theme.textSecondary)
                             .lineSpacing(2)
-                        Text(audio.tracks[audio.selectedTrack].clips.last?.name ?? "TRK \(String(format: "%02d", audio.selectedTrack + 1))")
+                        Text(audio.editTargetIndex(on: audio.selectedTrack)
+                                .map { audio.tracks[audio.selectedTrack].clips[$0].name }
+                             ?? "TRK \(String(format: "%02d", audio.selectedTrack + 1))")
                             .font(.system(size: 16, weight: .semibold, design: .monospaced))
                             .tracking(1)
                             .foregroundColor(Theme.textPrimary)
@@ -1982,8 +2027,13 @@ struct TrimEditorView: View {
                     .font(.system(size: 11, weight: .black, design: .monospaced))
                     .tracking(4)
                     .foregroundColor(Theme.gold)
-                if let ti = audio.trimmingTrack {
-                    Text("TRK \(String(format: "%02d", ti + 1))")
+                // Name the take being trimmed: since the editor can open on any take,
+                // not just the last one, "TRK NN" alone no longer says what APPLY will cut.
+                if let ti = audio.trimmingTrack, ti < audio.tracks.count {
+                    let take = audio.trimClipID
+                        .flatMap { id in audio.tracks[ti].clips.firstIndex { $0.id == id } }
+                    Text(take.map { "TRK \(String(format: "%02d", ti + 1)) \u{00B7} TAKE \($0 + 1)" }
+                         ?? "TRK \(String(format: "%02d", ti + 1))")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
                         .foregroundColor(Theme.gold.opacity(0.6))
                 }
@@ -2264,7 +2314,7 @@ struct SettingsPanel: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(!audio.tracks[audio.selectedTrack].isPlaying
-                                  || audio.tracks[audio.selectedTrack].clips.isEmpty
+                                  || !audio.hasEditableClip
                                   || audio.busyEdit != nil)
 
                         Button { audio.duplicateClip(audio.selectedTrack) } label: {
@@ -2283,7 +2333,7 @@ struct SettingsPanel: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(audio.tracks[audio.selectedTrack].clips.isEmpty || audio.busyEdit != nil)
+                        .disabled(!audio.hasEditableClip || audio.busyEdit != nil)
                     }
 
                     Button { audio.openTrimEditor(audio.selectedTrack) } label: {
@@ -2302,9 +2352,9 @@ struct SettingsPanel: View {
                         .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .disabled(audio.tracks[audio.selectedTrack].clips.isEmpty || audio.busyEdit != nil)
+                    .disabled(!audio.hasEditableClip || audio.busyEdit != nil)
 
-                    Text("\u{2318}T SPLIT  \u{2318}D DUP")
+                    Text("\u{2318}T SPLIT  \u{2318}D DUP  \u{2318}1\u{2013}8 TAKE")
                         .font(.system(size: 8, weight: .medium, design: .monospaced))
                         .foregroundColor(Theme.textTertiary.opacity(0.6))
                 }

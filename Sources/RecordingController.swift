@@ -227,6 +227,7 @@ final class RecordingController {
         }
         let dur   = m.recordingDuration
         let trk   = m.selectedTrack
+        let previousSelection = m.selectedClipID
         m.isRecording = false
         if !m.tracks.contains(where: { $0.isPlaying }) { m.metronome.stop() }
 
@@ -255,6 +256,9 @@ final class RecordingController {
             m.transport.pushUndo()
             m.recordings.append(rec)
             m.tracks[trk].clips.append(clip)
+            // The take just captured is the one the user will want to trim or duplicate —
+            // unless they picked a different one while it was being measured.
+            m.transport.followSelection(ifUnchanged: previousSelection, to: clip.id, on: trk)
             // Register only now that a clip references the file: pushUndo() above runs the
             // orphan sweep, so registering before the clip exists would delete the take.
             m.transport.registerSessionFile(u)
