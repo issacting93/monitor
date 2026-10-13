@@ -397,6 +397,29 @@ struct TopBar: View {
                     .truncationMode(.middle)
                     .frame(maxWidth: 300, alignment: .leading)
 
+                // Where the last export went. Appears only once there is a file — before
+                // one exists there is nothing to reveal, and a permanently greyed control
+                // beside the status is one more thing to read for no reason.
+                //
+                // The filename is in the tooltip rather than printed here: the status
+                // string beside it already names the file at the moment it is written, and
+                // this bar is the tightest row in the app at the 1280 pt minimum.
+                if let exported = audio.lastExportURL {
+                    Button { ExportActions.reveal(exported) } label: {
+                        Text("REVEAL")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .tracking(1)
+                            .padding(.horizontal, 8).padding(.vertical, 5)
+                            .foregroundColor(Theme.textPrimary)
+                            .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.18), lineWidth: 1))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Reveal last export in Finder")
+                    .accessibilityHint("Shows \(exported.lastPathComponent) in a Finder window")
+                    .help("Show \(exported.lastPathComponent) in Finder")
+                }
+
                 Text(audio.sampleRateString.uppercased())
                     .font(.system(size: 10, weight: .regular, design: .monospaced))
                     .tracking(2)

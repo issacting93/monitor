@@ -259,6 +259,15 @@ struct Tape08Commands: Commands {
 
             Button("Bounce Mixdown…") { audio.bounceMixdown() }
                 .disabled(!anyClips || busy)
+
+            // Disabled rather than hidden before there is a file, for the same reason
+            // Open Recent is: a File menu whose items move around as the app is used is
+            // harder to aim at than one that is always the same shape.
+            Button("Reveal Last Export in Finder") {
+                if let url = audio.lastExportURL { ExportActions.reveal(url) }
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
+            .disabled(audio.lastExportURL == nil)
         }
 
         // ── Edit ────────────────────────────────────────────────────────────

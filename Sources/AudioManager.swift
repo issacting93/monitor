@@ -108,6 +108,16 @@ class AudioManager: ObservableObject {
     /// have is worse than a spinner, because it stops being true about halfway.
     @Published var busyProgress: Double? = nil
 
+    /// The file the last export or mixdown wrote, or nil when nothing has been produced
+    /// this session.
+    ///
+    /// Kept here rather than left in the status string, which the next action overwrites
+    /// — the file outlives the sentence about it, and Stage 9's Reveal and Share have
+    /// nothing to act on until one exists. Both output paths set it, *Export Track…* and
+    /// *Bounce Mixdown*, because from the user's side they are the same event: a WAV
+    /// appeared somewhere.
+    @Published var lastExportURL: URL? = nil
+
     // Timeline zoom & playhead follow
     @Published var timelineZoom: Double = Preferences.timelineZoom {   // 0.5 – 4.0
         didSet { Preferences.timelineZoom = timelineZoom }

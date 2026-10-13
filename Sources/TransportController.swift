@@ -974,8 +974,14 @@ final class TransportController {
                 catch { return error.localizedDescription }
             } apply: { [weak self] error in
                 guard let self else { return }
-                self.manager.status = error.map { "Export error: \($0)" }
-                    ?? "Exported → \(destURL.lastPathComponent)"
+                if let error {
+                    self.manager.status = "Export error: \(error)"
+                } else {
+                    self.manager.status = "Exported → \(destURL.lastPathComponent)"
+                    // Only on the branch that wrote the file. A failed export leaves the
+                    // previous one in place, which is still the last file that exists.
+                    self.manager.lastExportURL = destURL
+                }
             }
         }
         #else
@@ -1197,8 +1203,12 @@ final class TransportController {
                 } apply: { [weak self] error in
                     guard let self else { return }
                     self.manager.bounceStatus = nil
-                    self.manager.status = error.map { "Mixdown error: \($0)" }
-                        ?? "Mixdown exported → \(url.lastPathComponent)"
+                    if let error {
+                        self.manager.status = "Mixdown error: \(error)"
+                    } else {
+                        self.manager.status = "Mixdown exported → \(url.lastPathComponent)"
+                        self.manager.lastExportURL = url
+                    }
                 }
             }
         }
