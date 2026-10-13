@@ -556,6 +556,23 @@ struct WaveformLaneView: View {
     private var hasClip: Bool { !track.clips.isEmpty }
     private var isSelected: Bool { audio.selectedTrack == index }
 
+    /// True while the pointer is over this lane holding something draggable.
+    ///
+    /// The lane has accepted drops since it was written, but `isTargeted` was passed
+    /// `nil`, so a drag produced no feedback beyond the system's own cursor: nothing on
+    /// the lane said it would take the file, and nothing said *which* of the eight would.
+    /// §9 stage 8's "no hover affordances" note, on the one control where it matters — a
+    /// drop is the only way to get audio in without an OP-XY on the other end.
+    @State private var dropTargeted = false
+
+    /// The lane's tooltip. "Nothing here yet" and "something can land here" are the two
+    /// things a lane's shape cannot say by itself.
+    private var laneHelp: String {
+        hasClip
+            ? "Drag an audio file here to add another take to track \(index + 1)"
+            : "Empty \u{2014} drag an audio file here, or press R to record onto track \(index + 1)"
+    }
+
     /// Makes `clip` the take that edits resolve to, exactly as clicking it does.
     ///
     /// The clip's context menu needs this because a right-click does not run the click
@@ -715,12 +732,16 @@ struct WaveformLaneView: View {
                     path.move(to: CGPoint(x: 0, y: 26))
                     path.addLine(to: CGPoint(x: laneWidth, y: 26))
                 }
-                .stroke(Theme.textPrimary.opacity(0.12), style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                .stroke(dropTargeted ? Theme.accent.opacity(0.7)
+                                     : Theme.textPrimary.opacity(0.12),
+                        style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
 
-                Text("\u{2014} EMPTY \u{2014}")
+                // Empty reads as "nothing here yet", not as "this is broken", and while a
+                // file is over the lane it says what dropping it would do.
+                Text(dropTargeted ? "DROP TO IMPORT" : "\u{2014} EMPTY \u{2014}")
                     .font(.system(size: 9, weight: .regular, design: .monospaced))
                     .tracking(4)
-                    .foregroundColor(Theme.textTertiary)
+                    .foregroundColor(dropTargeted ? Theme.accent : Theme.textTertiary)
                     .frame(width: laneWidth, height: 52)
             }
 
@@ -731,11 +752,17 @@ struct WaveformLaneView: View {
             }
         }
         .frame(width: laneWidth, height: 52)
-        .background(isSelected ? Theme.textPrimary.opacity(0.025) : Color.clear)
+        .background(dropTargeted
+                    ? Theme.accent.opacity(0.10)
+                    : (isSelected ? Theme.textPrimary.opacity(0.025) : Color.clear))
         .overlay(
-            Rectangle().stroke(isSelected ? color.opacity(0.4) : Theme.textPrimary.opacity(0.10), lineWidth: 1)
+            Rectangle().stroke(dropTargeted
+                               ? Theme.accent.opacity(0.8)
+                               : (isSelected ? color.opacity(0.4) : Theme.textPrimary.opacity(0.10)),
+                               lineWidth: 1)
         )
-        .onDrop(of: [.audio, .fileURL], isTargeted: nil) { providers in
+        .help(laneHelp)
+        .onDrop(of: [.audio, .fileURL], isTargeted: $dropTargeted) { providers in
             for provider in providers {
                 provider.loadItem(forTypeIdentifier: "public.file-url", options: nil) { data, _ in
                     guard let data = data as? Data,
@@ -2291,52 +2318,82 @@ struct MonitorView: View {
             .frame(maxWidth: .infinity)
             .padding(.vertical, 24)
 
-            // Scrolling waveform (hero)
-            GeometryReader { geo in
-                let midY = geo.size.height / 2
-                ZStack {
-                    // Grid lines
-                    Path { p in
-                        p.move(to: CGPoint(x: 0, y: midY))
-                        p.addLine(to: CGPoint(x: geo.size.width, y: midY))
-                    }
-                    .stroke(Theme.textPrimary.opacity(0.08), lineWidth: 0.5)
-
-                    // Recording marker
-                    if audio.isRecording {
-                        let recX = geo.size.width * 0.5
-                        Path { p in
-                            p.move(to: CGPoint(x: recX, y: 0))
-                            p.addLine(to: CGPoint(x: recX, y: geo.size.height))
-                        }
-                        .stroke(Theme.danger, lineWidth: 1)
-                        Text("REC IN")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .tracking(2)
-                            .foregroundColor(Theme.danger)
-                            .position(x: recX, y: 12)
-                    }
-
-                    // Waveform bars
-                    Path { path in
-                        let count = meters.waveformSamples.count
-                        guard count > 0 else { return }
-                        let barWidth: CGFloat = 3
-                        let spacing = geo.size.width / CGFloat(count)
-                        for (i, val) in meters.waveformSamples.enumerated() {
-                            let x = CGFloat(i) * spacing + spacing / 2
-                            let h = CGFloat(val) * (geo.size.height / 2.2)
-                            let rect = CGRect(x: x - barWidth / 2, y: midY - h,
-                                              width: barWidth, height: h * 2)
-                            path.addRect(rect)
-                        }
-                    }
-                    .fill(barColor.opacity(0.85))
+            // Scrolling waveform (hero), or — when there is nothing in the project and
+            // nothing live to show — an empty state.
+            //
+            // §9 stage 8 asks for a `ContentUnavailableView` on an empty project, so that
+            // an empty app does not read the same as a broken one. It goes here rather
+            // than over the lane grid, which is where the finding pointed: the lanes are
+            // the app's only file-drop target, and covering them would take away the one
+            // way to import audio without an OP-XY. This pane is the region that is
+            // genuinely blank — a hairline and nothing else — so it is where the message
+            // costs nothing and says something.
+            //
+            // The condition is the meter's own: with the engine stopped `resetDisplay`
+            // has already zeroed the waveform, so this replaces a flat line, never a
+            // trace.
+            if audio.tracks.allSatisfy({ $0.clips.isEmpty })
+                && !audio.isMonitoring && !audio.isRecording {
+                ContentUnavailableView {
+                    Label("No takes yet", systemImage: "waveform")
+                } description: {
+                    Text("Press REC in the transport to record onto the selected track, or "
+                         + "drag an audio file from Finder onto a track.")
+                } actions: {
+                    // The two ways out. Recording is the transport's own button, so it is
+                    // named rather than duplicated; monitoring is one press and is why
+                    // this pane is blank in the first place.
+                    Button("Monitor the Input") { audio.startMonitoring() }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Theme.bg)
+            } else {
+                GeometryReader { geo in
+                    let midY = geo.size.height / 2
+                    ZStack {
+                        // Grid lines
+                        Path { p in
+                            p.move(to: CGPoint(x: 0, y: midY))
+                            p.addLine(to: CGPoint(x: geo.size.width, y: midY))
+                        }
+                        .stroke(Theme.textPrimary.opacity(0.08), lineWidth: 0.5)
+
+                        // Recording marker
+                        if audio.isRecording {
+                            let recX = geo.size.width * 0.5
+                            Path { p in
+                                p.move(to: CGPoint(x: recX, y: 0))
+                                p.addLine(to: CGPoint(x: recX, y: geo.size.height))
+                            }
+                            .stroke(Theme.danger, lineWidth: 1)
+                            Text("REC IN")
+                                .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                .tracking(2)
+                                .foregroundColor(Theme.danger)
+                                .position(x: recX, y: 12)
+                        }
+
+                        // Waveform bars
+                        Path { path in
+                            let count = meters.waveformSamples.count
+                            guard count > 0 else { return }
+                            let barWidth: CGFloat = 3
+                            let spacing = geo.size.width / CGFloat(count)
+                            for (i, val) in meters.waveformSamples.enumerated() {
+                                let x = CGFloat(i) * spacing + spacing / 2
+                                let h = CGFloat(val) * (geo.size.height / 2.2)
+                                let rect = CGRect(x: x - barWidth / 2, y: midY - h,
+                                                  width: barWidth, height: h * 2)
+                                path.addRect(rect)
+                            }
+                        }
+                        .fill(barColor.opacity(0.85))
+                    }
+                }
+                .frame(maxHeight: .infinity)
+                .padding(.horizontal, 28)
+                .background(Theme.bg)
             }
-            .frame(maxHeight: .infinity)
-            .padding(.horizontal, 28)
-            .background(Theme.bg)
 
             // Time axis
             HStack {
