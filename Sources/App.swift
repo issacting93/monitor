@@ -164,6 +164,21 @@ struct Tape08Commands: Commands {
     private var anyClips: Bool { audio.tracks.contains { !$0.clips.isEmpty } }
     private var busy: Bool { audio.busyEdit != nil }
 
+    /// The submenu's label for a project: its filename, as macOS's own Open Recent shows.
+    ///
+    /// The one case that needs more is the same project saved into two folders, which
+    /// gives two identical rows — and since the rows *open* things, an unlabelled pair
+    /// is a coin flip. The containing folder is appended only then, so the common case
+    /// stays short.
+    private func recentTitle(for url: URL) -> String {
+        let name = url.deletingPathExtension().lastPathComponent
+        let shared = audio.recentProjects.filter {
+            $0.deletingPathExtension().lastPathComponent == name
+        }
+        guard shared.count > 1 else { return name }
+        return "\(name) — \(url.deletingLastPathComponent().lastPathComponent)"
+    }
+
     private var mutedBinding: Binding<Bool> {
         Binding(get: { audio.tracks[audio.selectedTrack].muted },
                 set: { want in
@@ -207,6 +222,27 @@ struct Tape08Commands: Commands {
         CommandGroup(replacing: .newItem) {
             Button("Open Project…") { audio.openProject() }
                 .keyboardShortcut("o", modifiers: .command)
+
+            // Open Recent is a submenu *inside* this group rather than a group of its
+            // own, because SwiftUI has no `.recents` placement to hang it on — the only
+            // way to get it directly under Open Project…, where macOS puts it, is to
+            // write it here. (The alternatives, `.newItem`-adjacent placements, would put
+            // it after Save and Bounce instead.)
+            //
+            // The list is `AudioManager.recentProjects`, a published copy of what
+            // `NSDocumentController` holds — see `ProjectRecents.swift` for why the store
+            // is the document controller in an app with no documents.
+            //
+            // An empty submenu is disabled rather than hidden: a menu whose entries move
+            // around as you use the app is harder to aim at than one that is always there.
+            Menu("Open Recent") {
+                ForEach(audio.recentProjects, id: \.self) { url in
+                    Button(recentTitle(for: url)) { audio.openProject(at: url) }
+                }
+                Divider()
+                Button("Clear Menu") { audio.clearRecentProjects() }
+            }
+            .disabled(audio.recentProjects.isEmpty)
 
             Divider()
 
@@ -518,7 +554,13 @@ struct MonitorApp: App {
                 // `defaultSize` below, and after the first run, the autosaved frame.
                 .frame(minWidth: 1280, minHeight: 720)
                 .background(Theme.bg)
-                .onAppear { appDelegate.audio = audio }
+                // `drainPendingOpens` on the next line is what makes a Finder
+                // double-click work when it launched the app: the URL arrives before
+                // `onAppear` gives the delegate somewhere to put it, so it waits here.
+                .onAppear {
+                    appDelegate.audio = audio
+                    appDelegate.drainPendingOpens()
+                }
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
@@ -540,6 +582,45 @@ struct MonitorApp: App {
 class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set by the scene on appear; nil only before the first window has been shown.
     weak var audio: AudioManager?
+
+    /// Projects LaunchServices handed over before there was an `AudioManager` to open
+    /// them through.
+    ///
+    /// The bundle claims `.xyproj` with `LSHandlerRank = Owner`, so double-clicking one in
+    /// Finder launches the app *and* delivers the URL — often while the scene is still
+    /// being built, because `audio` is only set by `onAppear`. Holding the URL and opening
+    /// it a moment later is right; dropping it because the app was not ready yet is the
+    /// exact "launches and does nothing" behaviour §9 found, so the queue is the point of
+    /// this being a queue and not a direct call.
+    private var pendingOpens: [URL] = []
+
+    /// A project opened from outside the app: a Finder double-click, the Dock's Recent
+    /// Items, or `open` from a shell. Routed to the same load as the Open Project… panel
+    /// — see `ProjectController.open(at:)` for why there is deliberately no second path.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        // This app is one session in one window, so a multi-file selection cannot open
+        // them all: whichever loaded last would be the only one left. The first project
+        // in the list is opened and the rest are ignored.
+        guard let url = urls.first(where: {
+            $0.pathExtension.caseInsensitiveCompare("xyproj") == .orderedSame
+        }) else { return }
+        pendingOpens.append(url)
+        drainPendingOpens()
+    }
+
+    /// Opens whatever `application(_:open:)` is holding, once there is something to open
+    /// it with. Called from the scene's `onAppear`, and safe to call at any other time: an
+    /// empty queue is the ordinary case and does nothing.
+    func drainPendingOpens() {
+        guard let audio, !pendingOpens.isEmpty else { return }
+        // Only the newest is opened. Several can only be queued if the app launched with
+        // them, and since each load replaces the whole session, opening them in order
+        // would do the earlier ones' work and then discard it — including, for a large
+        // project, a full clip decode on the way to being thrown away.
+        let url = pendingOpens[pendingOpens.count - 1]
+        pendingOpens.removeAll()
+        audio.openProject(at: url)
+    }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 

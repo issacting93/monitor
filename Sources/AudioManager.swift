@@ -153,6 +153,15 @@ class AudioManager: ObservableObject {
     @Published var projectName: String = "Untitled"
     @Published var projectDirty: Bool = false
 
+    /// The projects File ▸ Open Recent lists, newest first.
+    ///
+    /// A published copy of what `ProjectRecents` holds, because that list lives in
+    /// `NSDocumentController` and nothing about it is observable — the submenu is built
+    /// from this array and would otherwise only refresh when something else happened to
+    /// redraw the menu bar. Empty on iOS, which has neither the store nor the submenu.
+    /// Written only through `noteRecentProject` and `clearRecentProjects`.
+    @Published var recentProjects: [URL] = []
+
     // Undo/Redo (state + logic live in TransportController)
     var canUndo: Bool { transport.canUndo }
     var canRedo: Bool { transport.canRedo }
@@ -240,6 +249,12 @@ class AudioManager: ObservableObject {
         device.setupMIDI()
         effects.installBuiltInPresets()
         effects.refreshPresetList()
+        // The list survives relaunch inside `NSDocumentController`, so it is read once
+        // here rather than lazily by the menu: seeding it in `init` means the submenu is
+        // populated on the very first build of the menu bar, with no empty flash.
+        #if os(macOS)
+        recentProjects = ProjectRecents.all
+        #endif
     }
 
     deinit {
@@ -407,6 +422,31 @@ class AudioManager: ObservableObject {
     func saveProjectAs() { project.saveAs() }
 
     func openProject() { project.open() }
+
+    /// Opens a project the app did not have to ask for — a `.xyproj` double-clicked in
+    /// Finder, or an entry in the File ▸ Open Recent submenu. `LSHandlerRank = Owner` in
+    /// the bundle's document types means LaunchServices sends those events here, so this
+    /// is the other half of claiming the type: without it the app launches and does
+    /// nothing, which §9 rightly called worse than not claiming it at all.
+    func openProject(at url: URL) { project.open(at: url) }
+
+    /// Records a project as recently used and republishes the submenu's list. Lives here
+    /// rather than in `ProjectController` so the store, the published copy and the
+    /// platform guard stay in one place — `ProjectRecents` is AppKit, and both call sites
+    /// (a successful save, a successful load) are otherwise platform-neutral code.
+    func noteRecentProject(_ url: URL) {
+        #if os(macOS)
+        ProjectRecents.note(url)
+        recentProjects = ProjectRecents.all
+        #endif
+    }
+
+    func clearRecentProjects() {
+        #if os(macOS)
+        ProjectRecents.clear()
+        recentProjects = ProjectRecents.all
+        #endif
+    }
 
     // MARK: - Off-main work
 

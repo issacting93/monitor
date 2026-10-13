@@ -107,6 +107,10 @@ final class ProjectController {
             self.manager.projectName = packageURL.deletingPathExtension().lastPathComponent
             self.manager.projectDirty = false
             self.manager.status = "Saved \(self.manager.projectName)"
+            // Only here, in the branch that actually wrote the file: the failure path
+            // above returns before this, so a cancelled panel or a write error cannot
+            // put a URL in Open Recent that nothing was ever saved to.
+            self.manager.noteRecentProject(packageURL)
             completion?(true)
         }
     }
@@ -159,7 +163,15 @@ final class ProjectController {
         panel.canChooseFiles = true
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [UTType(filenameExtension: "xyproj") ?? .folder]
+        // The exported identifier first — it is the type the bundle declares, and the
+        // one `UTExportedTypeDeclarations` names (`com.tape08.xyproj`) — then the
+        // extension, so a build without the declaration still lets a project be picked.
+        // `UTType(_:)` here is the failable `init?(identifier:)`; `UTType(exportedAs:)`
+        // is the one that traps when the type is undeclared, which is exactly the case
+        // this chain exists to survive.
+        panel.allowedContentTypes = [UTType("com.tape08.xyproj")
+                                     ?? UTType(filenameExtension: "xyproj")
+                                     ?? .folder]
         panel.begin { [weak self] response in
             guard response == .OK, let url = panel.url else { return }
             DispatchQueue.main.async {
@@ -171,10 +183,37 @@ final class ProjectController {
         #endif
     }
 
+    /// Loads a project the app was handed rather than asked for: the URL from a Finder
+    /// double-click on a `.xyproj`, or one chosen from File ▸ Open Recent.
+    ///
+    /// Deliberately the *same* `performLoad` the panel uses. These URLs are not more
+    /// trusted than a panel's — a recent-document entry is a path out of `UserDefaults`
+    /// that may now be anything — so a second entry point that skipped validation would
+    /// be a way around the manifest checks `resolveInPackage` performs. It defers to the
+    /// next main-queue turn for the same reason the panel does: `performLoad` tears the
+    /// session down and rebuilds it, which must not happen inside a menu or event dispatch.
+    func open(at url: URL) {
+        #if os(macOS)
+        DispatchQueue.main.async { [weak self] in
+            self?.performLoad(from: url)
+        }
+        #else
+        manager.status = "Project load is not available on iPad yet"
+        #endif
+    }
+
     private func performLoad(from packageURL: URL) {
         let m = manager
         let jsonURL = packageURL.appendingPathComponent("project.json")
         let fm = FileManager.default
+
+        // Checked before the manifest, because Open Recent makes a *deleted* project
+        // reachable: its entry stays in the list, and reporting "missing project.json"
+        // for a folder that is not there at all describes the wrong problem.
+        guard fm.fileExists(atPath: packageURL.path) else {
+            m.status = "Project not found: \(packageURL.lastPathComponent)"
+            return
+        }
 
         guard fm.fileExists(atPath: jsonURL.path) else {
             m.status = "Not a valid project: missing project.json"
@@ -309,6 +348,10 @@ final class ProjectController {
         m.projectURL = packageURL
         m.projectName = packageURL.deletingPathExtension().lastPathComponent
         m.projectDirty = false
+        // Recorded at the end of a load that got this far, so an unreadable or
+        // malformed package is never added by the act of failing to open it. This is
+        // what makes a Finder double-click show up in Open Recent next launch.
+        m.noteRecentProject(packageURL)
 
         // Report both kinds of dropped clip rather than loading quietly short: a missing
         // file is a moved project, a path outside the package is a manifest that was

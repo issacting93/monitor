@@ -59,9 +59,11 @@ enum AboutPanel {
     static func show() {
         let info = Bundle.main.infoDictionary
         var options: [NSApplication.AboutPanelOptionKey: Any] = [
-            // Fixed rather than read from `CFBundleName`, which the two build paths
-            // spell differently ("TAPE 08" in `package.sh`, "Tape 08" in the Xcode
-            // plist). The brand is the shouting one, and Stage 5 reconciles the plists.
+            // Fixed, not read from `CFBundleName`. The two build paths used to spell that
+            // key differently ("TAPE 08" in `package.sh`, "Tape 08" in the Xcode plist);
+            // Stage 5 reconciled them onto "TAPE 08", which is what the window title, the
+            // in-app wordmark and this panel all say. Reading the bundle now would agree —
+            // the literal stays because the panel's own name should not be a build artifact.
             .applicationName: "TAPE 08",
             .credits: creditsText(),
         ]
