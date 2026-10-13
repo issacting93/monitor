@@ -981,6 +981,10 @@ final class TransportController {
                     // Only on the branch that wrote the file. A failed export leaves the
                     // previous one in place, which is still the last file that exists.
                     self.manager.lastExportURL = destURL
+                    #if os(macOS)
+                    Notifications.completion(title: "Export finished",
+                                             body: destURL.lastPathComponent)
+                    #endif
                 }
             }
         }
@@ -1208,6 +1212,10 @@ final class TransportController {
                     } else {
                         self.manager.status = "Mixdown exported → \(url.lastPathComponent)"
                         self.manager.lastExportURL = url
+                        #if os(macOS)
+                        Notifications.completion(title: "Mixdown finished",
+                                                 body: url.lastPathComponent)
+                        #endif
                     }
                 }
             }
