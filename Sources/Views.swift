@@ -920,6 +920,13 @@ struct LoopGridView: View {
     let playhead: PlayheadState
     let trackMeters: TrackMeterState
 
+    /// Reduce Motion is honoured where the app animates *motion*, and only there: a
+    /// timeline scroll that flies across the whole grid, and (in `ReelView`) a reel that
+    /// turns forever. The 3 % press scale in `RetroButtonStyle` and the 60 ms colour
+    /// fades are deliberately left alone — they are far below what the setting is for,
+    /// and suppressing them would only make the controls feel dead rather than calm.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var secsPerBar: Double { 240.0 / audio.metronomeBPM }
     private var totalBars: Int {
         let maxDur = audio.tracks.flatMap(\.clips).map(\.duration).max() ?? 0
@@ -1071,8 +1078,15 @@ struct LoopGridView: View {
                     )
                     .onChange(of: audio.isPlaying) {
                         if audio.isPlaying && audio.playheadFollow && audio.timelineZoom > 1.0 {
-                            withAnimation(.easeInOut(duration: 0.3)) {
+                            // Jump rather than glide under Reduce Motion. This one scroll
+                            // can travel the whole timeline in a single step, which is
+                            // exactly the large movement the setting exists to suppress.
+                            if reduceMotion {
                                 proxy.scrollTo("playhead_anchor", anchor: .center)
+                            } else {
+                                withAnimation(.easeInOut(duration: 0.3)) {
+                                    proxy.scrollTo("playhead_anchor", anchor: .center)
+                                }
                             }
                         }
                     }
@@ -1142,6 +1156,8 @@ private struct PlayheadScrollFollower: View {
     let followEnabled: Bool
     let proxy: ScrollViewProxy
 
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     private var tick: Int {
         guard let idx = tracks.firstIndex(where: { $0.isPlaying && !$0.clips.isEmpty }) else { return 0 }
         return Int(playhead.trackProgress[idx] * 20)
@@ -1152,8 +1168,15 @@ private struct PlayheadScrollFollower: View {
             .frame(width: 0, height: 0)
             .onChange(of: tick) {
                 guard isPlaying && followEnabled else { return }
-                withAnimation(.easeInOut(duration: 0.35)) {
+                // As at the play-start scroll above: follow still happens, it just stops
+                // being animated. The timeline has to keep up with the audio either way,
+                // so this is a jump and not a no-op.
+                if reduceMotion {
                     proxy.scrollTo("playhead_anchor", anchor: .center)
+                } else {
+                    withAnimation(.easeInOut(duration: 0.35)) {
+                        proxy.scrollTo("playhead_anchor", anchor: .center)
+                    }
                 }
             }
     }
@@ -1704,6 +1727,12 @@ struct ReelView: View {
     let spinning: Bool
     let fast: Bool
 
+    /// A reel that turns forever is continuous motion, and it is the one thing on this
+    /// screen that never stops while audio plays — so it is suppressed outright under
+    /// Reduce Motion rather than merely slowed. The reel still reads as a reel; it just
+    /// does not turn.
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     var body: some View {
         ZStack {
             // Outer rim
@@ -1733,8 +1762,11 @@ struct ReelView: View {
             }
         }
         .frame(width: 90, height: 90)
-        .rotationEffect(spinning ? .degrees(360) : .zero)
-        .animation(spinning ? .linear(duration: fast ? 1.4 : 2.6).repeatForever(autoreverses: false) : .default, value: spinning)
+        .rotationEffect(reduceMotion ? .zero : (spinning ? .degrees(360) : .zero))
+        .animation(reduceMotion
+                   ? nil
+                   : (spinning ? .linear(duration: fast ? 1.4 : 2.6).repeatForever(autoreverses: false) : .default),
+                   value: spinning)
     }
 }
 
