@@ -69,6 +69,10 @@ final class ProjectController {
         }
 
         m.status = "Saving \(packageURL.lastPathComponent)…"
+        // Progress is counted in clips copied, which is the only countable part of a save
+        // and the part that gets long. An empty project has nothing to count, so it
+        // reports nothing and keeps the spinner.
+        let report = m.reportEditProgress
         m.runOffMain(busy: "Saving project…") { () -> String? in
             let fm = FileManager.default
 
@@ -78,12 +82,13 @@ final class ProjectController {
             // Copy audio files into Audio/ subdirectory. The copies stay best-effort, as
             // before: a clip that cannot be copied leaves the manifest describing it,
             // which the load path already reports as a missing file.
-            for copy in copies {
+            for (i, copy) in copies.enumerated() {
                 try? fm.createDirectory(at: copy.dest.deletingLastPathComponent(),
                                         withIntermediateDirectories: true)
                 if !fm.fileExists(atPath: copy.dest.path) {
                     try? fm.copyItem(at: copy.src, to: copy.dest)
                 }
+                if !copies.isEmpty { report(Double(i + 1) / Double(copies.count)) }
             }
 
             // Serialize project data

@@ -99,6 +99,15 @@ class AudioManager: ObservableObject {
     @Published var busyEdit: String? = nil
     private var busyDepth = 0
 
+    /// How far through that edit the work queue says it is, 0…1, or nil when the edit
+    /// has no countable steps to report.
+    ///
+    /// Only the two long loops fill it in — a mixdown's mix pass and a project save's
+    /// file copies. Everything else leaves it nil, and the views fall back to the
+    /// indeterminate spinner they had before: a bar that invents a fraction it does not
+    /// have is worse than a spinner, because it stops being true about halfway.
+    @Published var busyProgress: Double? = nil
+
     // Timeline zoom & playhead follow
     @Published var timelineZoom: Double = Preferences.timelineZoom {   // 0.5 – 4.0
         didSet { Preferences.timelineZoom = timelineZoom }
@@ -463,12 +472,45 @@ class AudioManager: ObservableObject {
     func runOffMain<T>(busy: String, work: @escaping () -> T, apply: @escaping (T) -> Void) {
         busyDepth += 1
         busyEdit = busy
+        // Cleared here and not only in the completion: a fraction left over from the last
+        // edit would otherwise be drawn against this one until its first report arrives.
+        if busyDepth == 1 { busyProgress = nil }
         performOffMain(work: work) { [weak self] result in
             guard let self else { return }
             self.busyDepth -= 1
-            if self.busyDepth == 0 { self.busyEdit = nil }
+            if self.busyDepth == 0 {
+                self.busyEdit = nil
+                self.busyProgress = nil
+            }
             apply(result)
         }
     }
+
+    /// Reports how far through the running edit the caller is, 0…1.
+    ///
+    /// Called from the work queue, so it hops to the main thread itself. Reports that
+    /// arrive after the edit finished are dropped rather than published — a late fraction
+    /// from a superseded edit would move a bar that belongs to the new one.
+    ///
+    /// Throttled to about fifteen a second. `busyProgress` is `@Published`, so publishing
+    /// it re-evaluates every view that observes the manager — `LoopGridView` among them,
+    /// which is the largest body in the app and is shaped the way it is precisely to avoid
+    /// that. The mix loop below passes its tick far more often than that, and publishing
+    /// each one would cost more than the mix it is reporting on.
+    func reportEditProgress(_ fraction: Double) {
+        let now = CFAbsoluteTimeGetCurrent()
+        let due = progressLock.withLock { () -> Bool in
+            guard now - lastProgressReport >= 0.066 else { return false }
+            lastProgressReport = now
+            return true
+        }
+        guard due else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.busyEdit != nil else { return }
+            self.busyProgress = min(max(fraction, 0), 1)
+        }
+    }
+    private let progressLock = UnfairLock()
+    private var lastProgressReport: CFAbsoluteTime = 0
 }
 

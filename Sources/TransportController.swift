@@ -1083,6 +1083,9 @@ final class TransportController {
         // The spinner covers the whole bounce — reading every clip and mixing it is the
         // slow part, and it is what the button being disabled is telling the user about.
         manager.bounceStatus = "Mixing..."
+        // Bound here rather than reached for inside the closure, so the work queue talks
+        // to the manager directly and the closure needs no reference to this controller.
+        let report = manager.reportEditProgress
         manager.runOffMain(busy: "Mixing…") { () -> MixedDown? in
             // Read each source in full, fading its ends first. A track shorter than the
             // mix is loop-filled in the mix loop below, so its fade repeats each pass.
@@ -1111,7 +1114,21 @@ final class TransportController {
                 for f in 0..<maxFrames { ptr[f] = 0 }
             }
 
-            // Mix each source into the output
+            // Mix each source into the output.
+            //
+            // This is the half of a bounce that gets long enough to look like a hang, so
+            // it is the half that reports progress. The unit is the channel-pass the loop
+            // is built from; a long pass also ticks partway through, because eight tracks
+            // over a few minutes is only sixteen passes and a bar that jumps in sixteenths
+            // reads as broken rather than slow.
+            //
+            // The decode above reports nothing. There is no count to divide by — how long
+            // a read takes depends on the file, not on how many files there are — and a
+            // fraction invented to fill that gap would stop being true almost at once.
+            let unitsPerSource = min(channels, 2)
+            let totalUnits = max(loaded.count * unitsPerSource, 1)
+            var doneUnits = 0
+
             for src in loaded {
                 let srcLen = Int(src.buffer.frameLength)
                 // Simple equal-power pan: left = cos(angle), right = sin(angle)
@@ -1120,14 +1137,20 @@ final class TransportController {
                 let gainR = src.volume * sinf(angle)
                 let gains = channels >= 2 ? [gainL, gainR] : [src.volume]
 
-                for ch in 0..<min(channels, 2) {
+                for ch in 0..<unitsPerSource {
                     let outPtr = outBuf.floatChannelData![ch]
                     let srcPtr = src.buffer.floatChannelData![min(ch, Int(src.buffer.format.channelCount) - 1)]
                     let g = gains[ch]
                     for f in 0..<maxFrames {
                         let srcFrame = f % srcLen  // loop shorter tracks
                         outPtr[f] += srcPtr[srcFrame] * g
+                        if (f & 0x3FFFF) == 0 {
+                            report((Double(doneUnits) + Double(f) / Double(maxFrames))
+                                   / Double(totalUnits))
+                        }
                     }
+                    doneUnits += 1
+                    report(Double(doneUnits) / Double(totalUnits))
                 }
             }
 

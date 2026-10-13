@@ -386,6 +386,8 @@ struct TopBar: View {
                         .foregroundColor(statusColor)
                 }
 
+                busyIndicator
+
                 // The engine's status/routing string (or a failure reason). Without
                 // this the app fails silently — e.g. "No usable input format".
                 Text(audio.status.uppercased())
@@ -475,6 +477,34 @@ struct TopBar: View {
         .padding(.horizontal, 28).padding(.vertical, 10)
         .background(Theme.bg)
         .overlay(Rectangle().fill(Theme.textPrimary.opacity(0.10)).frame(height: 1), alignment: .bottom)
+    }
+
+    /// What an edit is doing, while it is doing it — the name `busyEdit` carries, beside
+    /// a bar when the work has countable steps and a spinner when it does not.
+    ///
+    /// Only a mixdown's mix pass and a project save's file copies report a fraction (see
+    /// `AudioManager.reportEditProgress`). Trimming, splitting and duplicating are one
+    /// file operation each and have nothing to divide by, so they keep the spinner rather
+    /// than a bar that would jump from empty to full.
+    @ViewBuilder
+    private var busyIndicator: some View {
+        if let busy = audio.busyEdit {
+            HStack(spacing: 6) {
+                if let progress = audio.busyProgress {
+                    ProgressView(value: progress)
+                        .progressViewStyle(.linear)
+                        .frame(width: 80)
+                } else {
+                    ProgressView().controlSize(.small)
+                }
+                Text(busy.uppercased())
+                    .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    .lineLimit(1)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(busy)
+            .accessibilityValue(audio.busyProgress.map { "\(Int($0 * 100)) percent" } ?? "In progress")
+        }
     }
 
     @ViewBuilder
@@ -1814,7 +1844,15 @@ struct TransportBar: View {
                 Button { audio.bounceMixdown() } label: {
                     HStack(spacing: 6) {
                         if audio.bounceStatus != nil {
-                            ProgressView().controlSize(.small)
+                            // Determinate once the mix pass says how far in it is, and
+                            // indeterminate before that: the decode that precedes it has
+                            // no honest fraction to show.
+                            if let p = audio.busyProgress {
+                                ProgressView(value: p).progressViewStyle(.linear)
+                                    .frame(width: 60).controlSize(.small)
+                            } else {
+                                ProgressView().controlSize(.small)
+                            }
                         }
                         Text("MIXDOWN").font(.system(size: 11, weight: .medium, design: .monospaced)).tracking(3)
                     }
