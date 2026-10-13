@@ -906,7 +906,7 @@ No menus. No Settings scene. No About. No document-open handling. No dirty indic
 
 ### 9.0.1 Status — updated 2026-10-13
 
-Five of the nine stages have landed, in the recommended order's first five positions. The audit
+Six of the nine stages have landed, in the recommended order's first six positions. The audit
 block above and §9.6 are the **original 2026-10-12 snapshot** and are left in place as the record of
 what the gap was; §9.6 carries a status column showing what has since changed, and the line numbers
 there have been re-resolved.
@@ -918,7 +918,7 @@ there have been re-resolved.
 | 6 — context menus + Escape | ✅ landed | `61b0611` · `f4162de` (Delete) |
 | 2 — Settings scene | ✅ landed | `6f8e503` (menu metronome) · `de99668` (the window) · `d0de50b` (preferences) · `d3af3a1` (devices) |
 | 3 — About, Help, `CREDITS.md` | ✅ landed | `fb98d7b` |
-| 5 — documents, recents, UTI, plist | not started | |
+| 5 — documents, recents, UTI, plist | ✅ landed | `b7537cb` (open event, Open Recent) · `48eb2b7` (bundle id, plists) |
 | 7 — accessibility | not started | |
 | 8 — tooltips, empty states, progress | not started | |
 | 9 — Reveal, Share, notifications | not started | |
@@ -940,7 +940,8 @@ signalling). Sources are linked at the end of this section.
 - `NSMicrophoneUsageDescription` in both plists.
 - `LSApplicationCategoryType = public.app-category.music`, `NSHumanReadableCopyright`,
   `CFBundleDocumentTypes` for `.xyproj`, and `ITSAppUsesNonExemptEncryption = false` — **all in the
-  Xcode plist only**; see Stage 5 for why the `package.sh` plist matters too.
+  Xcode plist only**; see Stage 5 for why the `package.sh` plist matters too. Since `48eb2b7` the
+  generated plist carries all four as well, and the two agree on every shared key.
 - `applicationShouldTerminateAfterLastWindowClosed` (`App.swift:271`).
 - Minimum window size enforced at 1280×720 (`App.swift:263`).
 - The `#if os(...)` platform seam is clean, so nothing here should need to touch the iPad build
@@ -965,7 +966,7 @@ public on `AudioManager` — this is wiring, not implementation.
 
 | Menu | Items |
 |---|---|
-| **File** | New Project · Open… (⌘O) · Open Recent ▸ *(Stage 5)* · Save (⌘S) · Save As… (⌘⇧S) · Export Track… (⌘E) · Bounce Mixdown… · Close (⌘W) |
+| **File** | New Project · Open… (⌘O) · Open Recent ▸ ✅ *(Stage 5)* · Save (⌘S) · Save As… (⌘⇧S) · Export Track… (⌘E) · Bounce Mixdown… · Close (⌘W) |
 | **Edit** | Undo (⌘Z) · Redo (⌘⇧Z) — via `CommandGroup(replacing: .undoRedo)`, titled dynamically |
 | **Transport** *(app-specific `CommandMenu`)* | Play/Stop (Space) · Record (R) · Return to Start (Return) · Metronome (,) · Tap Tempo · Quantize cycle · Loop toggle · Count-in ▸ (Off/1/2/4) |
 | **Track** *(app-specific `CommandMenu`)* | Select 1–8 (1…8) · Mute (M) · Solo (S) · Select Take 1–8 (⌘1…⌘8) · Trim / Split (⌘T) / Duplicate (⌘D) |
@@ -1013,7 +1014,9 @@ Playhead · Zoom In ⌘= · Zoom Out ⌘−).
 1. **No New Project item.** There is no multi-window and no session-reset command to wire it to; a
    "New Project" would have to mean *clear everything*, which is `Clear All Tracks` under a name that
    hides what it destroys. Left out rather than faked.
-2. **No Open Recent** — Stage 5's, correctly deferred.
+2. **Open Recent — closed by Stage 5** (`b7537cb`). It is a submenu inside this File group rather
+   than a group of its own, because SwiftUI has no `.recents` placement; putting it anywhere else
+   would have landed it after Save and Bounce instead of under Open Project….
 3. **No Trim menu item.** Trim is still reachable — the trim editor's own button (`Views.swift:2516`),
    and since Stage 6 a take's context menu — but it is absent from the menu bar, which is the one
    place §9.5 says a command belongs. Worth closing when Stage 2 opens the Settings scene.
@@ -1165,7 +1168,7 @@ window *and* forces a 1280×720 window onto a smaller display. Give the scene a 
 `.defaultSize`, and autosave the frame. It is two lines, it is the kind of thing users notice
 immediately, and it belongs with the dirty-state work rather than in a stage of its own.
 
-### Stage 5 — Documents: open, recent, and a UTI
+### Stage 5 — Documents: open, recent, and a UTI — ✅ LANDED (`b7537cb`, `48eb2b7`)
 
 **Problem.** The Xcode plist declares `.xyproj` as a document type with `LSHandlerRank = Owner`
 (`Tape08/Tape08/Info.plist`), but **nothing handles the open event**, so double-clicking a project in
@@ -1185,6 +1188,82 @@ inherit from whichever file was edited last. While in the plist, set
 about it — and note that the *built* plist has neither `NSHumanReadableCopyright` nor
 `LSApplicationCategoryType`, both of which the Xcode plist does carry, which is exactly the
 divergence this stage exists to close.
+
+**What landed, 2026-10-13 — and the two decisions in it.**
+
+| Commit | What |
+|---|---|
+| `b7537cb` | `AppDelegate.application(_:open:)` → `performLoad`; Open Recent on `NSDocumentController`; `Sources/ProjectRecents.swift` |
+| `48eb2b7` | bundle id settled; `UTExportedTypeDeclarations`; `NSApplicationSupportsSecureRestorableState`; the two plists reconciled |
+
+**The bundle id was put to the user, not picked.** The doc says it is "the one item here that cannot
+be changed after shipping, so it is a decision to make deliberately, not to inherit from whichever
+file was edited last", so it was asked rather than resolved from the diff. The answer was
+`com.tape08.app` — the Xcode target's id, kept; `package.sh` moved. The evidence for it: the Xcode
+target is the sandboxed, Mac App Store-bound one, `README.md:154` documents the sandbox container as
+`~/Library/Containers/com.tape08.app/`, and `ARCHITECTURE.md:374` gives the iPad sibling as
+`com.tape08.app.ipad`, which only reads as a child of it. **Nothing had pinned it**: there are no
+provisioning profiles in `~/Library/MobileDevice/` and `DEVELOPMENT_TEAM = ""`. That is what made it
+free to settle here and expensive to settle later.
+
+**`com.opxy.*` was deliberately left alone.** The obvious reading of "the bundle id was
+`com.opxy.tape08`, so `opxy` is the namespace" is wrong: those strings are effect *registry keys*
+(`com.opxy.tape-saturation`, `com.opxy.noise-gate`, …) which are written into `project.json` and into
+saved presets. Renaming them to match the id would silently break every project already on disk. The
+shared prefix was coincidence. Anything that later "aligns" them is a data-loss bug.
+
+**Departures from the doc's wording, and why.**
+
+- The doc offers `.onOpenURL` *or* `application(_:open:)`. The delegate method was chosen because the
+  delegate already exists and already holds the `AudioManager`, and because on macOS a Finder
+  double-click for a document type is delivered to the delegate rather than through SwiftUI's URL
+  plumbing. It also made the launch-order problem explicit — see below — rather than latent.
+- The doc says "route it to the existing `performLoad`". Doing that literally required a new public
+  entry point (`ProjectController.open(at:)`), which is the one place this could have gone wrong: a
+  second loader that trusted a URL more than the panel's would be a way around Stage 4's manifest
+  checks. There is one `performLoad` and it is the only thing that reads a package.
+- `UTTypeConformsTo` is `com.apple.package`, not `public.data`. The doc does not say which, and a
+  project *is* a directory holding `project.json` plus an `Audio/` tree. That makes Finder show it as
+  one document — a visible change, listed under what needs the hardware run.
+
+**Two consequences of the new surfaces, one of them a real follow-up.**
+
+- A project deleted from under Open Recent stays listed, so `performLoad` gained a "the package is
+  gone" branch ahead of its "not a project" one. Reporting a missing `project.json` for a folder that
+  isn't there describes the wrong problem.
+- **Opening a project while the session is dirty replaces it with no prompt.** This is what ⌘O
+  already did, so it is not a new defect — but Open Recent and Finder are two new routes to it, and
+  the quit path (Stage 4) already has the alert this wants. Not fixed here: it is a session-lifecycle
+  decision, not a document one, and it needs the same hardware pass as the rest. Its own item if
+  wanted.
+
+**What the gates could and could not settle.** Both typechecks, `./package.sh` and the Xcode build
+were green. The recents store *is* testable headlessly, and was: a probe compiling
+`Sources/ProjectRecents.swift` itself — not a restatement of it, the mistake §9.4 records — in a
+scratch defaults domain showed two projects listed newest-first with a `.wav` filtered out, `clear`
+emptying it, and **a second process reading back what the first wrote**, which is the survival claim
+the feature actually makes. A non-existent `.xyproj` is refused, and that turned out to be
+`noteNewRecentDocumentURL`'s own filter rather than ours — worth knowing, because it is why noting
+on the *success* paths is safe and noting a path a save never reached would have been harmless anyway.
+`application:openURLs:` is present in the shipped binary beside its sibling delegate selectors, with
+negative controls absent; that says AppKit can reach the method, not that LaunchServices calls it.
+
+The plist reconciliation is checkable and was checked: a scripted comparison of both plists' shared
+keys, with the Xcode `$(…)` build settings resolved to their real values, reports **zero value
+differences across all 17**, the nested `CFBundleDocumentTypes` and `UTExportedTypeDeclarations`
+dictionaries included. Four keys differ on purpose, all about where resources live rather than what
+the app is: `CFBundleIconFile` vs `CFBundleIconName` (no asset catalog on the dev path), and
+`NSPrincipalClass`/`LSUIElement` (wanted by a hand-assembled bundle, supplied by Xcode anyway).
+
+**Needs the OP-XY run:** whether Finder actually hands the URL over on a double-click; whether the
+Open Recent submenu draws directly under Open Project… at all; whether a `.xyproj` now shows as one
+document rather than a browsable folder; and whether the dev build's menu bar reads TAPE 08.
+
+**One doc claim corrected while here.** `README.md:55-59` and `ARCHITECTURE.md:370-374` both describe
+a `Tape08iPad/Tape08iPad.xcodeproj` with `com.tape08.app.ipad`. **There is no `Tape08iPad/`
+directory in the tree** — `Tape08/` holds only `Tape08` and `Tape08.xcodeproj`. The references are
+aspirational. They were still good evidence of the intended id *family*, which is why they are cited
+above, but they are not a description of what exists.
 
 ### Stage 6 — Context menus, and Escape — ✅ LANDED (`61b0611`, `f4162de`)
 
@@ -1336,7 +1415,7 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 |---|---|---|---|
 | **P0** | 4 — dirty guard | ✅ done | Only stage that prevents **data loss**. Can land any time; do it regardless of the rest. |
 | **P1** | 1 — menu bar | ✅ done | Largest discoverability gap; every action already exists, so it is wiring |
-| **P1** | 5 — documents + plist reconciliation | next but one | Double-click is broken *today* and the plists have diverged |
+| **P1** | 5 — documents + plist reconciliation | ✅ done | Double-click was broken *today* and the plists had diverged |
 | **P2** | 2 — Settings scene | ✅ done | Needed before shipping to MAS; ⌘, is expected |
 | **P2** | 3 — About + credits | ✅ done | Contained a licensing obligation |
 | **P2** | 6 — context menus | ✅ done | Depends on 1 |
@@ -1347,11 +1426,13 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 **Suggested execution order** differs from priority because of dependencies: **4 → 1 → 6 → 2 → 3 → 5 →
 7 → 8 → 9**. Stage 4 is first because it is small, independent, and the only correctness item;
 Stage 5 is late despite being P1 because the bundle-id decision in it may want a deliberate answer
-rather than a rushed one.
+rather than a rushed one. That is how it turned out: the id was put to the user, and it took one
+question to settle rather than a guess.
 
-**Progress against that order, 2026-10-13:** the first five have landed, so the next is **Stage 5**,
-then **7**. Stage 3 was moved ahead of it and is done — the licensing obligation it carried has been
-discharged, and discharged in the app rather than in the repository, which is where MIT wanted it.
+**Progress against that order, 2026-10-13:** the first six have landed, so the next is **Stage 7**,
+then **8**. Stage 3 was moved ahead of Stage 5 and is done — the licensing obligation it carried has
+been discharged, and discharged in the app rather than in the repository, which is where MIT wanted
+it.
 
 ## 9.4 Verification
 
@@ -1536,39 +1617,50 @@ settings rather than a change of look.
 The tables above are the 2026-10-12 snapshot. These are the rows that have since moved, with line
 numbers re-resolved against the tree rather than adjusted by arithmetic.
 
+**Re-resolved again in `48eb2b7`, and the previous lot were wrong.** Rows 3–12 and 25 below claimed
+to be re-resolved but carried the 2026-10-12 numbers: at `3722ee7` the File group was at `:207`, not
+`:190`, and `.commands` at `:525`, not `:487`. Every App.swift number in this table has now been
+computed from the current file rather than adjusted by hand, and the same pass caught that the
+"Moved since" paragraph's `:191` for the About group was off by one and its `:215` for Help was the
+*current* value rather than the one it was written against. `Views.swift` numbers are unaffected —
+nothing in these stages touched that file.
+
 | # | Item | Was | Now | Where |
 |---|---|---|---|---|
-| 3 | `.commands` / `CommandGroup` / `CommandMenu` | ABSENT | **PRESENT** — `.commands` plus five groups | `App.swift:487`; groups at `:190` File, `:215` Edit, `:225` Transport, `:253` Track, `:295` View |
-| 4 | File ▸ New/Open/Save items | ABSENT | **PRESENT — 5 items, two gaps** | `App.swift:190-209`. No *New Project*, no *Open Recent* (Stage 5) |
-| 5 | `WindowGroup` sizing | PARTIAL | **PRESENT** | `.defaultSize(width: 1440, height: 900)` at `App.swift:486` |
-| 6 | Window frame autosave | ABSENT | **PRESENT** | `setFrameAutosaveName` at `App.swift:349` |
-| 7 | `NSApplicationDelegate` methods | ONE | **TWO** | `:495` terminate-after-close · `:505` `applicationShouldTerminate` |
-| 10 | Unsaved-changes guard on quit | ABSENT | **PRESENT** — Save / Cancel / Don't Save sheet | `App.swift:505-537` |
-| 12 | Window title / represented URL / edited dot | ABSENT | **PRESENT** | `App.swift:344-345`, `:428` |
+| 3 | `.commands` / `CommandGroup` / `CommandMenu` | ABSENT | **PRESENT** — `.commands` plus five groups | `App.swift:567`; groups at `:222` File, `:268` Edit, `:278` Transport, `:316` Track, `:364` View |
+| 4 | File ▸ New/Open/Save items | ABSENT | **PRESENT — 6 items, one gap** | `App.swift:222-262`. No *New Project*; Open Recent added by Stage 5 (`:238`) |
+| 5 | `WindowGroup` sizing | PARTIAL | **PRESENT** | `.defaultSize(width: 1440, height: 900)` at `App.swift:566` |
+| 6 | Window frame autosave | ABSENT | **PRESENT** | `setFrameAutosaveName` at `App.swift:418` |
+| 7 | `NSApplicationDelegate` methods | ONE | **THREE** | `:600` `application(_:open:)` · `:625` terminate-after-close · `:635` `applicationShouldTerminate` |
+| 10 | Unsaved-changes guard on quit | ABSENT | **PRESENT** — Save / Cancel / Don't Save sheet | `App.swift:635-666` |
+| 12 | Window title / represented URL / edited dot | ABSENT | **PRESENT** | `App.swift:412-414`, `:500` |
 | 18 | Context menus | ABSENT (0) | **PRESENT — 3** | take `Views.swift:599` · track header `:773` · transport `:1590` |
 | 19 | Tooltips (`.help`) | 2 | **still 2**, lines drifted | `Views.swift:980`, `:1661` |
 | 20 | Keyboard shortcuts | 20 bindings, all invisible | **split in two** | see below |
 | 24 | Focus / keyboard navigation | ABSENT — Tab repurposed | **unchanged** — Tab is still a monitor binding | `App.swift:110` |
-| 25 | Escape handling | ABSENT | **PRESENT** | `.onExitCommand` at `App.swift:435` |
+| 25 | Escape handling | ABSENT | **PRESENT** | `.onExitCommand` at `App.swift:509` |
 
 **Item 20 has changed shape, and the binding table above is now wrong.** `3e35349` moved every
 **⌘-modified** binding out of the monitor and into the menu bar, where it carries a real
 `keyboardShortcut` and is therefore visible and learnable: ⌘O, ⌘S, ⌘⇧S, ⌘E, ⌘Z, ⌘⇧Z, ⌘T, ⌘D, ⌘1–⌘8
-and the ⌘-zoom pair (`App.swift:192-311`). The **bare keys stayed** in the monitor — Space, R, M, S,
+and the ⌘-zoom pair (`App.swift:222-381`). The **bare keys stayed** in the monitor — Space, R, M, S,
 1–8, Return, comma, Tab, F, and Delete — as 17 `case` labels (`App.swift:40-115`), because a bare key
 handed to the menu bar is matched ahead of the responder chain and would fire inside a focused text
 field. So the table's rows for ⌘Z, ⌘S, ⌘O, ⌘E, ⌘T, ⌘D, ⌘1–⌘8 and ⌘-zoom now describe the **menu
 bar**, not the monitor, and its line numbers are all stale. **Delete is new and absent from that
 table entirely.**
 
-**Moved since:** item 1 (Settings scene) is **PRESENT** — `Settings {` at `App.swift:517`, the gear
+**Moved since:** item 1 (Settings scene) is **PRESENT** — `Settings {` at `App.swift:576`, the gear
 as a `SettingsLink` at `Views.swift:421`, and the scene supplies both the app-menu item and ⌘, with
 no `keyboardShortcut` written anywhere. Item 2 (About panel) is **PRESENT** — `AboutPanel.show()` from
-`CommandGroup(replacing: .appInfo)` at `App.swift:191`, Help replaced at `:215`, and the ported DSP's
-full MIT notice carried in the panel's credits. Item 19 is still 2 tooltips.
+`CommandGroup(replacing: .appInfo)` at `App.swift:207`, Help replaced at `:215`, and the ported DSP's
+full MIT notice carried in the panel's credits. Item 9 (Open Recent) is **PRESENT** — a submenu inside
+the File group at `App.swift:238`, on `NSDocumentController` through `Sources/ProjectRecents.swift`,
+with the open event that makes its entries mean something handled at `App.swift:600`. Item 19 is
+still 2 tooltips. Item 4's second gap is closed, so File's remaining gap is *New Project* alone.
 
 **Still ABSENT, verified again 2026-10-13:** items
-9 (Open Recent), 11 (autosave / crash recovery), 13 (drag **out** — one `onDrop` at
+11 (autosave / crash recovery), 13 (drag **out** — one `onDrop` at
 `Views.swift:668`; the `onDragStart`/`onDragEnd` at `Views.swift:190-217` are a *fader's* undo-gesture
 closures, not SwiftUI `.onDrag`, so a grep for "onDrag" is misleading here), 14, 15, 16, 17, 21, 22,
 23, 26–29, 30–33 and 35. Item 26–29 in particular: `grep -rn "accessibility" Sources/*.swift | wc -l`
