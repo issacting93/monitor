@@ -1,5 +1,31 @@
 # Development TODO & Modular Effects Plan
 
+> ## Status — 2026-10-13
+>
+> This document is layered, and the layers are not the same age. Read this first.
+>
+> | Section | What it is | State |
+> |---|---|---|
+> | §1–§7 | The **original plan**: a bug list and a modular-effects initiative written against `OPXYMultitrack`. | **Historical.** §8.0 reconciles it against the shipped app; §6 and §7 are superseded outright. |
+> | §8 | The 2026-10-11 **code review** of `Sources/`, plus its fixes. | **Landed**, except `U2` and `P2` — see §8.7. |
+> | §9 | **macOS platform conformance**, nine stages. | **All nine landed 2026-10-13.** §9.0.1 lists the commits. |
+>
+> **Where the code actually stands.** All of §8's fixes and all nine of §9's stages are in and
+> pushed — `origin/main` is at **`d7a1c7f`** (2026-10-13), and the tree is level with it.
+>
+> **What is genuinely open, in the order it should be done:**
+>
+> 1. **The OP-XY hardware run**, which is overdue and has been growing. It now owes three
+>    stages' worth of runtime checks: §8.6's matrix, §9.4's Stage 7 (VoiceOver + Accessibility
+>    Inspector — no gate can verify it), Stage 8's four, and Stage 9's five. This is the largest
+>    body of unverified work in the tree, and nothing below should start before it.
+> 2. **`U2`** — layered playback and a playhead you can place inside a lane (§8.4).
+> 3. **`P2`** — in-place chain edits, including the kernel splice-order bug (§8.3).
+>
+> The last two are held back deliberately and for the same reason: each rewrites the audio path,
+> and the count-in and seek work they would sit on top of has still not been heard on hardware.
+> Landing them first would make the next run unattributable. See §8.7 and "Second run" there.
+
 This document consolidates the current bug list, UI/UX improvements, and a new initiative to build a **modular sound effects system** with custom guitar-pedal-style effects (chorus, distortion, etc.). It is intended to be appended to the existing project TODO.
 
 ---
@@ -220,35 +246,54 @@ final class ChorusKernel: NSObject, XYEffectPluginKernel {
 
 ## 6. Prioritised TODO List
 
+> **⚠️ Superseded — kept as the record of the original plan.** Every P0 and P1 below landed
+> (see §8.0 for the reconciliation), and the P2/P3 rows describe the `AudioGraph` / plugin-bundle
+> design §8.0 explicitly recommends **not** building — the shipped app is a fixed linear effect
+> chain. **The live list is §8.7.**
+
 | Priority | Task | Notes |
 |----------|------|-------|
-| P0 | Fix tape UI resizing | Blocking layout |
-| P0 | Remove neural amp | Causes noise |
-| P0 | Fix touch zones | Usability |
-| P1 | Add count-in | Recording workflow |
-| P1 | Implement track splitting | Editing workflow |
-| P1 | Align L/R levels, Input/Position, Output/Loop | UI polish |
-| P1 | Redesign dials | Visual consistency |
-| P2 | Build AudioGraph core | Foundation for effects |
-| P2 | Implement plugin loader | Load custom bundles |
-| P2 | Create EffectNode wrapper | Integrate kernels |
-| P2 | Implement Gain, Distortion, Chorus | First effects |
-| P3 | Add Delay, Reverb, EQ, Compressor | Expand library |
-| P3 | Graph editor UI | Advanced feature |
-| P3 | Remove unused code | Maintenance |
-| P3 | C++ DSP bridge | Performance |
+| ~~P0~~ | ~~Fix tape UI resizing~~ | ✅ done (2026-10-12) — §8.0 |
+| ~~P0~~ | ~~Remove neural amp~~ | ✅ already absent — §8.0 |
+| ~~P0~~ | ~~Fix touch zones~~ | ✅ done (2026-10-12) — §8.0 |
+| ~~P1~~ | ~~Add count-in~~ | ✅ done; timing fixed later by `U1` — §8.4 |
+| ~~P1~~ | ~~Implement track splitting~~ | ✅ done (⌘T); limited to the last take by `U2` |
+| ~~P1~~ | ~~Align L/R levels, Input/Position, Output/Loop~~ | ✅ done — §8.0 |
+| ~~P1~~ | ~~Redesign dials~~ | ✅ done — §8.0 |
+| P2 | Build AudioGraph core | **Not built, by design** — §8.0/§8.8 rebaseline |
+| P2 | Implement plugin loader | **Not built, by design** — the app has no bundles |
+| P2 | Create EffectNode wrapper | **Not built, by design** |
+| P2 | Implement Gain, Distortion, Chorus | ✅ done as `EffectModule`s in the linear chain |
+| P3 | Add Delay, Reverb, EQ, Compressor | ✅ done in the linear chain |
+| P3 | Graph editor UI | **Not built, by design** |
+| ~~P3~~ | ~~Remove unused code~~ | ✅ done (`16c62ee`) — §8.5 |
+| P3 | C++ DSP bridge | **Not built** — kernels are Swift |
 
 ---
 
 ## 7. Next Steps
 
-1. **Sprint 1 (1 week)**: Fix P0 items – tape UI, neural amp removal, touch zones.
-2. **Sprint 2 (1 week)**: P1 items – count-in, track splitting, UI alignment, dial redesign.
-3. **Sprint 3 (2 weeks)**: Start modular effects – implement `AudioGraph`, `EffectNode`, plugin loader, and the Gain/Distortion/Chorus effects.
-4. **Sprint 4 (2 weeks)**: Integrate effects into the track UI, add presets, and begin work on the graph editor.
-5. **Continuous**: Remove unused code, write tests for DSP kernels, document the plugin API.
+> **⚠️ Superseded — these sprints are the original plan's, and all four are long since past.**
+> Sprint 1 and Sprint 2 are done; Sprint 3's and Sprint 4's subject matter was rebaselined away
+> (§8.0, §8.8). What comes next is at the top of this document and in §8.7 — the hardware run,
+> then `U2`, then `P2`.
+
+1. ~~**Sprint 1 (1 week)**: Fix P0 items – tape UI, neural amp removal, touch zones.~~ ✅
+2. ~~**Sprint 2 (1 week)**: P1 items – count-in, track splitting, UI alignment, dial redesign.~~ ✅
+3. ~~**Sprint 3 (2 weeks)**: Start modular effects – implement `AudioGraph`, `EffectNode`, plugin loader, and the Gain/Distortion/Chorus effects.~~ The effects shipped; the graph and loader did not, by §8.0's recommendation.
+4. ~~**Sprint 4 (2 weeks)**: Integrate effects into the track UI, add presets, and begin work on the graph editor.~~ Presets shipped; there is no graph editor.
+5. ~~**Continuous**: Remove unused code, write tests for DSP kernels, document the plugin API.~~ Dead code removed (`16c62ee`); there is no plugin API, so nothing to document.
 
 This document should be treated as a living plan. Update it as tasks are completed and new requirements emerge.
+
+## 7a. TAPE 08 — Work Summary (a pasted status report, kept as history)
+
+> **Historical — do not read the numbers below as current.** This was pasted in as a plain-text
+> progress report and describes the tree as it stood **before §8 and §9 began**. Its opening line
+> ("a single-file ~5,700-line `monitor.swift`") describes the *pre-refactor* app, and its closing
+> file list ("`Sources/` — 17 files, 6,233 lines") is roughly half the tree that exists now.
+> `ARCHITECTURE.md` §4 is the current file map. Kept because it is the only narrative account of
+> the `AudioManager` facade split (Phases 1–3, Stages 0–16), which nothing else records.
 
  TAPE 08 — Work Summary                                                                
                                                                                         
@@ -382,7 +427,8 @@ This document should be treated as a living plan. Update it as tasks are complet
 
 # 8. Code Review — 2026-10-11 (`Sources/`)
 
-Review of the current `Sources/` tree (17 files, 6,233 lines) after the Stage 0–16 facade split.
+Review of the `Sources/` tree as it stood on 2026-10-11 (then 17 files, 6,233 lines; **31 files,
+10,682 lines today** — see `ARCHITECTURE.md` §4) after the Stage 0–16 facade split.
 `swiftc -typecheck -parse-as-library Sources/*.swift` is clean (EXIT=0, zero warnings), and the
 structure is coherent. Findings below are ordered by severity, each with a `file:line` anchor and a
 concrete action. **Nothing here has been run against the audio interface** — the "verify" items are
@@ -396,14 +442,14 @@ codebase. The shipped app is different: a fixed linear **effect chain** of `Effe
 
 | ID | Plan item | Status in current code | Where |
 |----|-----------|------------------------|-------|
-| UI-1 | Tape UI doesn't resize when panels shown | **Done (2026-10-12)** — the panels had since become overlays, so this row's "clip/compress" was out of date; the real defect was the opposite, 660 pt of panel *covering* a 1060 pt window. Fixed by pushing the workspace right by the open drawer's width. | `App.swift:220`, `:262`; `Theme.swift:41`; `AudioManager.swift:54` |
-| UI-2 | No count-in | **Done** — `countInBars` + transport "CIN" cycle (`Views.swift:1455`) + `RecordingController` count-in timer. (Timing concern below, U1.) | `RecordingController.swift:151` (count-in `:156-161`) |
-| UI-3 | Cannot split a recorded track | **Done** — `splitClipAtPlayhead` (⌘T). Limited: only the last take, only while playing (U2). | `TransportController.swift:588` |
+| UI-1 | Tape UI doesn't resize when panels shown | **Done (2026-10-12)** — the panels had since become overlays, so this row's "clip/compress" was out of date; the real defect was the opposite, 660 pt of panel *covering* a 1060 pt window. Fixed by pushing the workspace right by the open drawer's width. | `App.swift:499`; `Theme.swift:44`; `AudioManager.swift:47`, `:55` |
+| UI-2 | No count-in | **Done** — `countInBars` + transport "CIN" cycle (`Views.swift:2006`) + `RecordingController`'s beat-grid count-in. (Timing concern below, U1.) | `RecordingController.swift:160` (count-in arm at `:176`) |
+| UI-3 | Cannot split a recorded track | **Done** — `splitClipAtPlayhead` (⌘T). Limited: only the last take, only while playing (U2). | `TransportController.swift:753` |
 | UI-4 | Remove neural amp | **Already absent** — no NAM/amp code anywhere. Nothing to do. | — |
-| UI-5 | Touch zones too small | **Done (2026-10-12)** — track play/M/S are drawn at 28 pt inside a 44 pt target, chain-editor chevrons and delete 24 → 32, iOS card and top bar controls 44. One deliberate exception below 44: the zoom/follow trio is 44 × 18, because that row is the grid's vertical rhythm and growing it moves all eight track rows. | `Views.swift:41`, `:632`, `Views_iOS.swift` |
-| UI-6 | Dials look weird | **Done** — `ArcKnob` is a 270° sweep from 135°, indicator dot, value readout. Needs a visual re-check only. | `Views.swift:48` |
-| UI-7 | L/R levels too far apart | **Done** — Arrange `VerticalMeter`s are `HStack(spacing: 4)`. | `Views.swift:430`, `:1556` |
-| UI-8 | Input/Position, Output/Loop misaligned | **Done** — aligned 2×2 grid with a fixed 100 pt first column. | `Views.swift:1556` |
+| UI-5 | Touch zones too small | **Done (2026-10-12)** — track play/M/S are drawn at 28 pt inside a 44 pt target (`hit: 44`, `Views.swift:41`), chain-editor chevrons and delete 24 → 32, iOS card and top bar controls 44. One deliberate exception below 44: the zoom/follow trio is 44 × 18, because that row is the grid's vertical rhythm and growing it moves all eight track rows. | `Views.swift:41` · play/M/S at `:905`, `:930`, `:945` · chevrons/delete at `:1732`, `:1744`, `:1780` · `Views_iOS.swift:477`, `:486`, `:505` |
+| UI-6 | Dials look weird | **Done** — `ArcKnob` is a 270° sweep from 135°, indicator dot, value readout. Needs a visual re-check only. | `Views.swift:65` |
+| UI-7 | L/R levels too far apart | **Done** — Arrange `VerticalMeter`s are `HStack(spacing: 4)`. | `Views.swift:2330`, meters at `:2331`–`:2332` |
+| UI-8 | Input/Position, Output/Loop misaligned | **Done** — aligned 2×2 grid with a fixed 100 pt first column. | `Views.swift:2204`–`:2214` |
 | CL-1 | Unused code | **Valid** — see §8.5 for the concrete list. | — |
 
 **Section 2 (modular plugin bundles / `AudioGraph` / C++ bridge) does not describe the shipped
@@ -455,7 +501,7 @@ edits can't clear it early.
 
 **C5 — `start()` while already monitoring built a second engine. ✅ FIXED.** `EngineController.start()`
 (`EngineController.swift:39`) built a fresh `AVAudioEngine` on every call; the Monitor view's input
-picker calls `startMonitoring()` without stopping first (`Views.swift:1949`), leaking the running
+picker calls `startMonitoring()` without stopping first (`Views.swift:2570`), leaking the running
 engine and leaving **two live graphs (doubled audio)**. Fixed by tearing down first when already
 monitoring (top of `start()`).
 
@@ -466,8 +512,8 @@ stored, copied on duplicate, and never applied — playback and mixdown ignored 
 exits could still click.
 → **Do:** apply the fades in `bounceMixdown` and at schedule time, or delete the fields.
 → **Fixed by:** `applyClipFades` (`Support.swift:61`) is applied both at schedule time
-(`loadTrackBuffer`, `TransportController.swift:1155`, call at `:1175`) and in `bounceMixdown` (`:1017`,
-call at `:1043`), so playback and export agree.
+(`loadTrackBuffer`, `TransportController.swift:1249`, fade applied at `:1269`; loop tiling at `:1155`) and in `bounceMixdown` (`:1080`,
+call at `:1109`), so playback and export agree.
 
 **H2 — Edits only ever touch the last clip. ✅ FIXED** `openTrimEditor`/`applyTrim`,
 `splitClipAtPlayhead`, `duplicateClip` and `exportTrack` all used `clips.last`, and there was no clip
@@ -536,8 +582,8 @@ objects (`meters`, `trackMeters`, `playhead`), and each view observes the one it
 **Fixed by:** the P1 stage of the 2026-10-12 refactor; §8.7.
 
 **P2 — `rebuildChain` rebuilds the entire engine on every chain edit.** Add/remove/reorder
-(`addSlot` `EffectsChainController.swift:82`, `removeSlot` `:87`, `moveSlot` `:93`, all landing in
-`rebuildChain` `:100`) does a full `stopMonitoring()`/`startMonitoring()` — expensive, drops track
+(`addSlot` `EffectsChainController.swift:91`, `removeSlot` `:96`, `moveSlot` `:102`, all landing in
+`rebuildChain` `:109`) does a full `stopMonitoring()`/`startMonitoring()` — expensive, drops track
 playback, and feeds C2.
 → **Do:** insert/remove only the affected AU node(s) in place.
 
@@ -567,11 +613,12 @@ sample lands within the poll interval (≤10 ms) of the downbeat rather than exa
 that is audible is a hardware question, not a compile-time one.
 
 **U2 — Split requires a playhead you can place.** `splitClipAtPlayhead`
-(`TransportController.swift:700`) reads the live per-track playhead. H2 (2026-10-12) narrowed this:
+(`TransportController.swift:753`) reads the live per-track playhead. H2 (2026-10-12) narrowed this:
 the split now targets the *selected* take, though still only when that take is the track's last one.
 The 2026-10-12 seek narrowed it further: dragging the bar ruler parks `seekFraction` and writes the
 same value into `trackProgress`, so a *stopped* clip can now be split at the dragged position, and
-the Settings button asks for a playhead rather than for playback (`Views.swift:2356`).
+what a split asks for is now a playhead rather than playback — the status says so outright
+(`TransportController.swift:775`, "Move playhead inside clip to split").
 → **Still missing:** the position can only be placed on the ruler's span (`BarRulerView`, normalised
 per track and scaled to the longest clip), not inside a lane, and every track reads the same fraction
 of its *own* clip rather than a shared tape position. `clips.last` is still the only take decoded and
@@ -580,7 +627,7 @@ earlier take are silent.
 → **Do:** a playhead you can place inside a lane, and real multi-clip playback for it to describe.
 
 **U3 — MIDI track-follow reacts to every channel-voice message. ✅ FIXED (2026-10-12)**
-`DeviceController.setupMIDI` (`DeviceController.swift:98`) selected a track on *any* UMP
+`DeviceController.setupMIDI` (`DeviceController.swift:136`) selected a track on *any* UMP
 channel-voice type `0x2`, including note-off and CC — so sustained controller traffic from the OP-XY
 will fight the user's track clicks.
 → **Fixed by:** the guard now requires note-on with a non-zero velocity — kind `(status >> 4) & 0xF ==
@@ -632,8 +679,8 @@ with `+` and `-` with `_` rather than assuming the unshifted glyph. This is a **
 it deliberately re-points each binding at the printed key — so it is its own commit.
 
 Still open, unrelated to this sweep: the master bus is silently attenuated `× 0.6`
-(`EngineController.swift:181, 314`), so the OUT knob never reaches unity; mixdown loops short clips
-up to the longest track (`bounceMixdown`, `TransportController.swift:1017`), which is surprising for
+(`EngineController.swift:189`, `:338`), so the OUT knob never reaches unity; mixdown loops short clips
+up to the longest track (`bounceMixdown`, `TransportController.swift:1080`), which is surprising for
 an export.
 
 ## 8.6 Verification checklist (needs the USB interface)
