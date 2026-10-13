@@ -74,13 +74,23 @@ class AudioManager: ObservableObject {
     var trimClipDuration: TimeInterval = 0
 
     // Count-in
-    @Published var countInBars: Int = 0   // 0 = off, 1–4
+    //
+    // Persisted, along with the six other preferences further down this file: each
+    // of those also writes through to `Preferences` and reads its factory value from
+    // there, so the Settings window's choices survive a launch and there is one place
+    // a default is written down. Everything else on this facade is session state and
+    // stays that way — that is the line the drawer/scene split is drawn along.
+    @Published var countInBars: Int = Preferences.countInBars {
+        didSet { Preferences.countInBars = countInBars }
+    }
     @Published var countingIn: Bool = false
 
     // View mode (0 = arrange, 1 = monitor)
     @Published var viewMode: Int = 0
     @Published var bounceStatus: String? = nil
-    @Published var loopEnabled: Bool = true
+    @Published var loopEnabled: Bool = Preferences.loopEnabled {
+        didSet { Preferences.loopEnabled = loopEnabled }
+    }
 
     // What an edit is doing off the main thread, or nil when nothing is in flight.
     // Set by `runOffMain`, which every edit and export routes its file work through.
@@ -90,13 +100,21 @@ class AudioManager: ObservableObject {
     private var busyDepth = 0
 
     // Timeline zoom & playhead follow
-    @Published var timelineZoom: Double = 1.0     // 0.5 – 4.0
-    @Published var playheadFollow: Bool = true
+    @Published var timelineZoom: Double = Preferences.timelineZoom {   // 0.5 – 4.0
+        didSet { Preferences.timelineZoom = timelineZoom }
+    }
+    @Published var playheadFollow: Bool = Preferences.playheadFollow {
+        didSet { Preferences.playheadFollow = playheadFollow }
+    }
 
     // Metronome
     @Published var metronomeEnabled = true
-    @Published var metronomeBPM: Double = 120
-    @Published var metronomeVolume: Double = 0.45
+    @Published var metronomeBPM: Double = Preferences.metronomeBPM {
+        didSet { Preferences.metronomeBPM = metronomeBPM }
+    }
+    @Published var metronomeVolume: Double = Preferences.metronomeVolume {
+        didSet { Preferences.metronomeVolume = metronomeVolume }
+    }
 
     // Tap tempo
     @Published var tapTempoFlash: Bool = false
@@ -176,7 +194,9 @@ class AudioManager: ObservableObject {
     }
 
     // Master limiter
-    @Published var masterLimiterEnabled: Bool = true
+    @Published var masterLimiterEnabled: Bool = Preferences.masterLimiterEnabled {
+        didSet { Preferences.masterLimiterEnabled = masterLimiterEnabled }
+    }
 
     // MIDI
     @Published var midiTrackFollow: Bool = true
