@@ -79,6 +79,7 @@ struct IOSTopBar: View {
                     .foregroundColor(Theme.accent)
             }
             .buttonStyle(RetroButtonStyle(tint: Theme.accent, hit: 44))
+            .accessibilityLabel("Effects")
         }
         .padding(.horizontal, 18).padding(.vertical, 10)
         .background(Theme.surface)
@@ -100,6 +101,7 @@ struct IOSTopBar: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(audio.viewMode == mode ? [.isSelected] : [])
     }
 }
 
@@ -130,6 +132,18 @@ struct IOSTrackRow: View {
     private var color: Color { Theme.trackColor(index) }
     private var isSelected: Bool { audio.selectedTrack == index }
 
+    /// The spoken form of the row's state, mirroring the macOS header's. Without it the
+    /// eight select buttons are indistinguishable by ear.
+    private var iosHeaderValue: String {
+        var parts = [isSelected ? "Selected" : "Not selected"]
+        parts.append(track.clips.isEmpty
+                     ? "Empty"
+                     : (track.clips.count == 1 ? "1 take" : "\(track.clips.count) takes"))
+        if track.muted { parts.append("Muted") }
+        if track.solo { parts.append("Soloed") }
+        return parts.joined(separator: ", ")
+    }
+
     var body: some View {
         let anySolo = audio.tracks.contains { $0.solo }
         let audible = anySolo ? track.solo : !track.muted
@@ -149,6 +163,13 @@ struct IOSTrackRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            // Same reasoning as the macOS header: eight rows draw the same shape, so the
+            // name alone ("01"…"08") cannot say which one is selected or what it holds.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Track \(index + 1)")
+            .accessibilityValue(iosHeaderValue)
+            .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+            .accessibilityHint(audible ? "" : "Inaudible")
 
             Rectangle().fill(color).frame(width: 3, height: 44)
 
@@ -169,6 +190,7 @@ struct IOSTrackRow: View {
                 }
                 .frame(height: 4)
                 .cornerRadius(4)
+                .accessibilityHidden(true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
@@ -178,12 +200,15 @@ struct IOSTrackRow: View {
                 set: { audio.setTrackVolume(index, $0) }
             ), onDragStart: { audio.beginUndoGesture() }, onDragEnd: { audio.endUndoGesture() })
             .frame(width: 110, height: 26)
+            .accessibilityLabel("Track \(index + 1) volume")
 
+            // The fader already speaks this number; reading it twice adds nothing.
             Text("\(Int(track.volume * 100))")
                 .font(.system(size: 12, design: .monospaced))
                 .foregroundColor(Theme.textSecondary)
                 .monospacedDigit()
                 .frame(width: 34, alignment: .trailing)
+                .accessibilityHidden(true)
 
             // Controls. `mark:` puts a text-level difference on mute and solo so the
             // state is not carried by the fill colour alone — the same reasoning as the
@@ -191,14 +216,24 @@ struct IOSTrackRow: View {
             // solid when armed, which is a shape difference rather than a tint.
             let recordingThis = audio.isRecording && audio.selectedTrack == index
             IconToggle(label: "M", mark: .struck, on: track.muted, tint: Theme.accent) { audio.toggleMute(index) }
+                .accessibilityLabel("Mute track \(index + 1)")
+                .accessibilityValue(track.muted ? "Muted" : "Not muted")
+                .accessibilityAddTraits(track.muted ? [.isSelected] : [])
             IconToggle(label: "S", mark: .underlined, on: track.solo, tint: Color(red: 0x5C/255, green: 0xC8/255, blue: 0xE0/255)) { audio.toggleSolo(index) }
+                .accessibilityLabel("Solo track \(index + 1)")
+                .accessibilityValue(track.solo ? "Soloed" : "Not soloed")
+                .accessibilityAddTraits(track.solo ? [.isSelected] : [])
             IconToggle(system: track.isPlaying ? "pause.fill" : "play.fill", on: track.isPlaying, tint: Theme.accent) {
                 audio.toggleTrackPlayback(index)
             }
+            .accessibilityLabel("Track \(index + 1) playback")
+            .accessibilityValue(track.isPlaying ? "Playing" : "Stopped")
             IconToggle(system: recordingThis ? "circle.fill" : "circle",
                        on: recordingThis, tint: Theme.danger) {
                 audio.toggleTrackRecord(index)
             }
+            .accessibilityLabel("Record track \(index + 1)")
+            .accessibilityValue(recordingThis ? "Recording" : "Not recording")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(isSelected ? Theme.surfaceRaised : Theme.surface)
@@ -284,6 +319,7 @@ struct IOSMonitorView: View {
                 .fill((audio.isRecording ? Theme.danger : Theme.accent).opacity(0.85))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityHidden(true)
 
             // Gain
             HStack(spacing: 18) {
@@ -307,13 +343,15 @@ struct IOSTransportBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            barButton("arrow.uturn.backward", enabled: audio.canUndo) { audio.undo() }
-            barButton("arrow.uturn.forward", enabled: audio.canRedo) { audio.redo() }
+            barButton("arrow.uturn.backward", label: "Undo", enabled: audio.canUndo) { audio.undo() }
+            barButton("arrow.uturn.forward", label: "Redo", enabled: audio.canRedo) { audio.redo() }
 
-            barButton(audio.isPlaying ? "pause.fill" : "play.fill", enabled: true, tint: Theme.accent) {
+            barButton(audio.isPlaying ? "pause.fill" : "play.fill",
+                      label: audio.isPlaying ? "Stop playback" : "Play all",
+                      enabled: true, tint: Theme.accent) {
                 if audio.isPlaying { audio.stopAll() } else { audio.playAll() }
             }
-            barButton("stop.fill", enabled: true) { audio.stopAll() }
+            barButton("stop.fill", label: "Stop", enabled: true) { audio.stopAll() }
 
             // Record (uses the transport's own path, not the per-track arm)
             Button {
@@ -331,6 +369,8 @@ struct IOSTransportBar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel(audio.isRecording ? "Stop recording" : "Record")
+            .accessibilityValue(audio.countingIn ? "Counting in" : "")
 
             Button { audio.clearAll() } label: {
                 Text("CLEAR").font(.system(size: 13, weight: .bold, design: .monospaced))
@@ -348,6 +388,8 @@ struct IOSTransportBar: View {
             IconToggle(system: "metronome.fill", on: audio.metronomeEnabled, tint: Theme.accent) {
                 audio.toggleMetronome()
             }
+            .accessibilityLabel("Metronome")
+            .accessibilityValue(audio.metronomeEnabled ? "On" : "Off")
         }
         .padding(.horizontal, 18).padding(.vertical, 10)
         .background(Theme.surface)
@@ -355,7 +397,8 @@ struct IOSTransportBar: View {
     }
 
     @ViewBuilder
-    private func barButton(_ system: String, enabled: Bool, tint: Color = Theme.textPrimary, action: @escaping () -> Void) -> some View {
+    private func barButton(_ system: String, label: String, enabled: Bool,
+                           tint: Color = Theme.textPrimary, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: system)
                 .font(.system(size: 18, weight: .medium))
@@ -366,6 +409,7 @@ struct IOSTransportBar: View {
         }
         .buttonStyle(.plain)
         .disabled(!enabled)
+        .accessibilityLabel(label)
     }
 }
 
@@ -397,6 +441,7 @@ struct IOSEffectsSheet: View {
                             Button(mod.displayName) { audio.addSlot(moduleID: mod.identifier) }
                         }
                     } label: { Text("ADD") }
+                    .accessibilityLabel("Add effect")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("DONE") { dismiss() }
@@ -421,6 +466,7 @@ struct IOSEffectCard: View {
                     .frame(width: 24, height: 24)
                     .overlay(Text("\(index + 1)").font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundColor(slot.enabled ? Theme.accent : Theme.textTertiary))
+                    .accessibilityHidden(true)
                 Text(mod.displayName.uppercased())
                     .font(.system(size: 15, weight: .bold, design: .monospaced))
                     .foregroundColor(slot.enabled ? Theme.textPrimary : Theme.textEngraved)
@@ -432,6 +478,7 @@ struct IOSEffectCard: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
+                    .accessibilityLabel("Move \(mod.displayName) earlier in the chain")
                 }
                 if index < audio.liveChain.count - 1 {
                     Button { audio.moveSlot(from: index, to: index + 1) } label: {
@@ -440,6 +487,7 @@ struct IOSEffectCard: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
+                    .accessibilityLabel("Move \(mod.displayName) later in the chain")
                 }
                 Button { audio.toggleSlotBypass(index) } label: {
                     Text(slot.enabled ? "ON" : "BYP")
@@ -449,12 +497,16 @@ struct IOSEffectCard: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("\(mod.displayName) enabled")
+                .accessibilityValue(slot.enabled ? "On" : "Bypassed")
+                .accessibilityHint("Toggles this effect")
                 Button { audio.removeSlot(at: index) } label: {
                     Image(systemName: "xmark")
                         .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain).foregroundColor(Theme.textTertiary)
+                .accessibilityLabel("Remove \(mod.displayName) from the chain")
             }
 
             if !mod.parameters.isEmpty {

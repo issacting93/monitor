@@ -137,6 +137,25 @@ struct ArcKnob: View {
                 .foregroundColor(Theme.textEngraved)
                 .lineLimit(1)
         }
+        // One element, not three. The drawn arc, the numeric readout and the label are
+        // one control to everyone except VoiceOver, which would otherwise announce a
+        // stray value and a stray word beside an unlabelled group. The adjustable action
+        // is what makes the knob *usable* rather than merely described: it is a drag
+        // target with no keyboard affordance of its own, so VoiceOver's increment and
+        // decrement are the only way to move it without a pointer. The step is 1 % of
+        // the range, which is fine enough for a knob and coarse enough not to need
+        // hundreds of swipes.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(displayValue)
+        .accessibilityAdjustableAction { direction in
+            let step = (range.upperBound - range.lowerBound) / 100
+            switch direction {
+            case .increment: value = min(range.upperBound, value + step)
+            case .decrement: value = max(range.lowerBound, value - step)
+            @unknown default: break
+            }
+        }
     }
 
     private var displayValue: String {
@@ -218,6 +237,19 @@ struct TrackFader: View {
                     }
             )
         }
+        // The fader is a bare drag target with nothing to read, so it gets the same
+        // treatment as `ArcKnob`: one element, a value, and an adjustable action. The
+        // label comes from the caller, which is the only place that knows which track
+        // this is. The 2 % step matches what a drag of a few points would do.
+        .accessibilityElement()
+        .accessibilityValue("\(Int(value * 100)) percent")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: value = min(1, value + 0.02)
+            case .decrement: value = max(0, value - 0.02)
+            @unknown default: break
+            }
+        }
     }
 }
 
@@ -237,6 +269,7 @@ struct TempoControl: View {
             }
             .buttonStyle(.plain)
             .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.16), lineWidth: 1))
+            .accessibilityLabel("Decrease tempo")
 
             VStack(spacing: 2) {
                 Text("\(Int(audio.metronomeBPM))")
@@ -252,6 +285,9 @@ struct TempoControl: View {
             .overlay(
                 Rectangle().stroke(Theme.textPrimary.opacity(0.10), lineWidth: 1)
             )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Tempo")
+            .accessibilityValue("\(Int(audio.metronomeBPM)) BPM")
 
             Button { audio.metronomeBPM = min(300, audio.metronomeBPM + 1) } label: {
                 Text("+")
@@ -262,6 +298,7 @@ struct TempoControl: View {
             }
             .buttonStyle(.plain)
             .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.16), lineWidth: 1))
+            .accessibilityLabel("Increase tempo")
 
             Button { audio.tapTempo() } label: {
                 Text("TAP")
@@ -275,6 +312,8 @@ struct TempoControl: View {
             .buttonStyle(.plain)
             .overlay(Rectangle().stroke(audio.tapTempoFlash ? Theme.accent : Theme.textPrimary.opacity(0.16), lineWidth: 1))
             .animation(.easeOut(duration: 0.06), value: audio.tapTempoFlash)
+            .accessibilityLabel("Tap tempo")
+            .accessibilityHint("Tap repeatedly to set the tempo")
         }
         .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.16), lineWidth: 1))
     }
@@ -305,6 +344,7 @@ struct TopBar: View {
                 Image(systemName: "circle.circle")
                     .font(.system(size: 16, weight: .light))
                     .foregroundColor(Theme.textPrimary)
+                    .accessibilityHidden(true)
                 Text("TAPE 08")
                     .font(.system(size: 13, weight: .regular, design: .monospaced))
                     .tracking(4)
@@ -379,6 +419,7 @@ struct TopBar: View {
                     }
                     .labelsHidden()
                     .frame(width: 140)
+                    .accessibilityLabel("Input device")
                 }
                 HStack(spacing: 4) {
                     Text("OUT")
@@ -398,6 +439,7 @@ struct TopBar: View {
                     }
                     .labelsHidden()
                     .frame(width: 140)
+                    .accessibilityLabel("Output device")
                 }
             }
 
@@ -424,6 +466,7 @@ struct TopBar: View {
                         .padding(.horizontal, 8).padding(.vertical, 6)
                 }
                 .buttonStyle(RetroButtonStyle(tint: Theme.accent))
+                .accessibilityLabel("Settings")
             }
         }
         .padding(.horizontal, 28).padding(.vertical, 10)
@@ -448,6 +491,9 @@ struct TopBar: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // The active tab is drawn as a coloured underline only; the trait is what says
+        // which one it is when the colour cannot.
+        .accessibilityAddTraits(audio.viewMode == mode ? [.isSelected] : [])
     }
 }
 
@@ -482,6 +528,10 @@ struct VerticalMeter: View {
                 .font(.system(size: 9, weight: .regular, design: .monospaced))
                 .foregroundColor(Theme.textSecondary)
         }
+        // A bar that moves at frame rate is noise to a screen reader, and the number it
+        // stands for is already on screen in text: the PEAK readout on macOS, the dB line
+        // on iPad. Hidden whole rather than labelled, so VoiceOver does not sit on it.
+        .accessibilityHidden(true)
     }
 }
 
@@ -587,6 +637,19 @@ struct WaveformLaneView: View {
                     }
                     .frame(width: max(clipW - 2, 4), height: 50)
                     .contentShape(Rectangle())
+                    // A take is a real target — click it to select, right-click for the
+                    // edit menu — so it stays in the tree rather than being hidden as
+                    // decoration. Its context menu items become VoiceOver actions by
+                    // themselves; only the click-to-select needs stating.
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Track \(index + 1) take \(ci + 1)")
+                    .accessibilityValue("\(Int(clip.duration.rounded())) seconds"
+                                        + (isThisSelected ? ", selected" : ""))
+                    .accessibilityAddTraits(isThisSelected ? [.isButton, .isSelected] : [.isButton])
+                    .accessibilityAction {
+                        audio.selectedTrack = index
+                        audio.selectedClipID = clip.id
+                    }
                     // minimumDistance 0 so an ordinary click counts, and the drag reports
                     // where in the clip it landed — the split point a later change needs.
                     // macOS ScrollViews pan with the wheel, not with a mouse drag, so this
@@ -704,6 +767,12 @@ struct TrackControlsView: View {
                     .foregroundColor(track.isPlaying ? Theme.accent : Theme.textSecondary)
             }
             .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: track.isPlaying, hit: 44))
+            // "play.fill" alone would be announced as "play button" for every one of the
+            // eight rows, with nothing to say which track or whether it is already
+            // running. The track number in the label and the state in the value are what
+            // make the row's four controls tell apart.
+            .accessibilityLabel("Track \(index + 1) playback")
+            .accessibilityValue(track.isPlaying ? "Playing" : "Stopped")
 
             Button { audio.toggleMute(index) } label: {
                 // The `filled:` state below already inverts this button in greyscale —
@@ -719,6 +788,9 @@ struct TrackControlsView: View {
                     .foregroundColor(track.muted ? Theme.bg : Theme.textSecondary)
             }
             .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: track.muted, filled: track.muted, hit: 44))
+            .accessibilityLabel("Mute track \(index + 1)")
+            .accessibilityValue(track.muted ? "Muted" : "Not muted")
+            .accessibilityAddTraits(track.muted ? [.isSelected] : [])
 
             Button { audio.toggleSolo(index) } label: {
                 // Underline rather than a strike, so solo and mute are distinguishable
@@ -730,6 +802,9 @@ struct TrackControlsView: View {
                     .foregroundColor(track.solo ? Theme.bg : Theme.textSecondary)
             }
             .buttonStyle(RetroButtonStyle(tint: Color(red: 0x5C/255.0, green: 0xC8/255.0, blue: 0xE0/255.0), active: track.solo, filled: track.solo, hit: 44))
+            .accessibilityLabel("Solo track \(index + 1)")
+            .accessibilityValue(track.solo ? "Soloed" : "Not soloed")
+            .accessibilityAddTraits(track.solo ? [.isSelected] : [])
 
             TrackFader(
                 value: Binding(
@@ -740,16 +815,23 @@ struct TrackControlsView: View {
                 onDragEnd: { audio.endUndoGesture() }
             )
             .frame(width: 80, height: 20)
+            .accessibilityLabel("Track \(index + 1) volume")
 
+            // Same as the pan readout below: the fader to its left already speaks this
+            // number, so reading it again would just say it twice.
             Text("\(Int(track.volume * 100))")
                 .font(.system(size: 11, weight: .regular, design: .monospaced))
                 .foregroundColor(Theme.textSecondary)
                 .monospacedDigit()
                 .frame(width: 28, alignment: .trailing)
+                .accessibilityHidden(true)
 
+            // "L" and "R" are axis marks for the slider between them, not content; the
+            // slider says its own value and the "C"/"L40"/"R40" readout follows it.
             Text("L")
                 .font(.system(size: 8, weight: .medium, design: .monospaced))
                 .foregroundColor(Theme.textTertiary)
+                .accessibilityHidden(true)
             Slider(value: Binding(
                 get: { track.pan },
                 set: { audio.setTrackPan(index, $0) }
@@ -758,14 +840,25 @@ struct TrackControlsView: View {
             }
             .frame(width: 50)
             .tint(color.opacity(0.6))
+            .accessibilityLabel("Track \(index + 1) pan")
+            .accessibilityValue(track.pan == 0
+                                ? "Centre"
+                                : (track.pan < 0 ? "\(Int(abs(track.pan) * 100)) percent left"
+                                                 : "\(Int(track.pan * 100)) percent right"))
             Text("R")
                 .font(.system(size: 8, weight: .medium, design: .monospaced))
                 .foregroundColor(Theme.textTertiary)
+                .accessibilityHidden(true)
             Text(track.pan == 0 ? "C" : (track.pan < 0 ? "L\(Int(abs(track.pan) * 100))" : "R\(Int(track.pan * 100))"))
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundColor(Theme.textSecondary)
                 .frame(width: 32, alignment: .trailing)
+                .accessibilityHidden(true)
 
+            // A live meter is not something VoiceOver can usefully read — it changes 60
+            // times a second — so it is hidden rather than exposed as a value that would
+            // be stale before it finished being spoken. The head unit's PEAK readout is
+            // the speakable form of the same number.
             GeometryReader { geo in
                 let lvl = index < trackMeters.levels.count ? trackMeters.levels[index] : 0
                 ZStack(alignment: .leading) {
@@ -777,6 +870,7 @@ struct TrackControlsView: View {
             }
             .frame(width: 40, height: 6)
             .cornerRadius(4)
+            .accessibilityHidden(true)
         }
         .padding(.horizontal, 10)
         .frame(width: Theme.controlsColumnWidth)
@@ -910,6 +1004,22 @@ struct BarRulerView: View {
                     audio.seek(toFraction: Double(v.location.x / loopSpan))
                 }
         )
+        // The ruler is the grid's only seek affordance and it is a bare drag strip with
+        // nothing focusable on it, so the same seek is exposed as an adjustable element —
+        // 1 % of the loop span per step, which is finer than the drag's own resolution.
+        // Making it one element means the bar numbers stop being read out; they are a
+        // positional aid for the eye, and the value below states the position in words.
+        .accessibilityElement()
+        .accessibilityLabel("Timeline position")
+        .accessibilityValue("\(Int((audio.seekFraction ?? 0) * 100)) percent")
+        .accessibilityAdjustableAction { direction in
+            let current = audio.seekFraction ?? 0
+            switch direction {
+            case .increment: audio.seek(toFraction: min(1, current + 0.01))
+            case .decrement: audio.seek(toFraction: max(0, current - 0.01))
+            @unknown default: break
+            }
+        }
     }
 
     private func longestClipBars() -> Int {
@@ -945,6 +1055,19 @@ struct LoopGridView: View {
         return ((raw + 3) / 4) * 4
     }
 
+    /// The spoken form of a track header's state. Eight headers draw the same shape, so
+    /// without this VoiceOver reaches eight buttons called "01"…"08" and cannot say which
+    /// one is selected, which are muted, or which hold anything.
+    private func headerValue(_ i: Int, _ trk: TrackInfo) -> String {
+        var parts = [audio.selectedTrack == i ? "Selected" : "Not selected"]
+        parts.append(trk.clips.isEmpty
+                     ? "Empty"
+                     : (trk.clips.count == 1 ? "1 take" : "\(trk.clips.count) takes"))
+        if trk.muted { parts.append("Muted") }
+        if trk.solo { parts.append("Soloed") }
+        return parts.joined(separator: ", ")
+    }
+
     var body: some View {
         GeometryReader { outerGeo in
             let headerW: CGFloat = 200
@@ -973,6 +1096,7 @@ struct LoopGridView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Zoom timeline out")
 
                         Text("\(Int(audio.timelineZoom * 100))%")
                             .font(.system(size: 8, weight: .medium, design: .monospaced))
@@ -987,6 +1111,7 @@ struct LoopGridView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Zoom timeline in")
 
                         Spacer()
 
@@ -999,6 +1124,8 @@ struct LoopGridView: View {
                         }
                         .buttonStyle(.plain)
                         .help(audio.playheadFollow ? "Follow ON (F)" : "Follow OFF (F)")
+                        .accessibilityLabel("Playhead follow")
+                        .accessibilityValue(audio.playheadFollow ? "On" : "Off")
                     }
                     .frame(width: headerW, height: 18)
 
@@ -1045,6 +1172,19 @@ struct LoopGridView: View {
                         .padding(.vertical, 6)
                         .opacity(audible ? 1 : 0.32)
                         .overlay(Rectangle().fill(Theme.textPrimary.opacity(0.07)).frame(height: 1), alignment: .bottom)
+                        // `.ignore` rather than `.combine`: the header's children are the
+                        // number, the identity bar and two lines of text, and combining
+                        // them would read "01, TRK 01, EMPTY" — the same facts twice, in
+                        // the drawing's order rather than a useful one.
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("Track \(i + 1)")
+                        .accessibilityValue(headerValue(i, trk))
+                        .accessibilityAddTraits(audio.selectedTrack == i ? [.isSelected] : [])
+                        // The row dims to 32 % when it is inaudible. That is a real cue
+                        // ("this is muted or another track is soloed") and hiding it would
+                        // lose it for everyone else, so it is carried into the value the
+                        // same way, in words.
+                        .accessibilityHint(audible ? "" : "Inaudible")
                     }
                 }
 
@@ -1280,6 +1420,9 @@ struct SideEffectsPanelView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Load preset")
+                .accessibilityValue(audio.presetNames.isEmpty ? "None saved" : "")
+                .accessibilityHint("Chooses a saved effect chain")
 
                 if audio.showPresetSave {
                     TextField("Name", text: $audio.presetSaveName)
@@ -1336,6 +1479,7 @@ struct SideEffectsPanelView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Delete a saved preset")
                 }
             }
             .padding(.horizontal, 12).padding(.bottom, 8)
@@ -1437,6 +1581,7 @@ struct SideEffectsPanelView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Move \(mod.displayName) earlier in the chain")
                     }
                     if index < audio.liveChain.count - 1 {
                         Button { audio.moveSlot(from: index, to: index + 1) } label: {
@@ -1447,6 +1592,7 @@ struct SideEffectsPanelView: View {
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .accessibilityLabel("Move \(mod.displayName) later in the chain")
                     }
                 }
 
@@ -1465,6 +1611,9 @@ struct SideEffectsPanelView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("\(mod.displayName) enabled")
+                .accessibilityValue(slot.enabled ? "On" : "Bypassed")
+                .accessibilityHint("Toggles this effect")
 
                 // Delete
                 Button { audio.removeSlot(at: index) } label: {
@@ -1475,6 +1624,7 @@ struct SideEffectsPanelView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Remove \(mod.displayName) from the chain")
             }
             // 5 rather than 10/8: the row's tallest child just went from 24 to 32 pt, and
             // a 12-slot chain cannot afford to grow 8 pt per slot. The padding pays for it,
@@ -1583,6 +1733,8 @@ struct TransportBar: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(audio.isRecording ? "Stop recording" : "Record")
+                .accessibilityValue(audio.countingIn ? "Counting in" : "")
 
                 tpBtn(icon: "stop.fill", label: "STOP",
                       fg: Theme.textPrimary, border: Theme.textPrimary.opacity(0.16)) { audio.stopAll() }
@@ -1656,6 +1808,8 @@ struct TransportBar: View {
                         .foregroundColor(audio.metronomeEnabled ? Theme.bg : Theme.textPrimary)
                 }
                 .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: audio.metronomeEnabled, filled: audio.metronomeEnabled))
+                .accessibilityLabel("Metronome")
+                .accessibilityValue(audio.metronomeEnabled ? "On" : "Off")
 
                 // Metronome volume
                 Slider(value: Binding(
@@ -1664,6 +1818,8 @@ struct TransportBar: View {
                 ), in: 0...1)
                 .frame(width: 50)
                 .tint(Theme.accent.opacity(0.5))
+                .accessibilityLabel("Metronome volume")
+                .accessibilityValue("\(Int(audio.metronomeVolume * 100)) percent")
 
                 // Count-in toggle: cycles 0 → 1 → 2 → 4 → 0
                 Button {
@@ -1681,6 +1837,13 @@ struct TransportBar: View {
                         .foregroundColor(audio.countInBars > 0 ? Theme.bg : Theme.textSecondary)
                 }
                 .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: audio.countInBars > 0, filled: audio.countInBars > 0))
+                // The printed label is an abbreviation ("CIN", "2IN"); spoken, the bar
+                // count is the fact that matters, so it goes in the value.
+                .accessibilityLabel("Count-in")
+                .accessibilityValue(audio.countInBars > 0
+                                    ? (audio.countInBars == 1 ? "1 bar" : "\(audio.countInBars) bars")
+                                    : "Off")
+                .accessibilityHint("Cycles off, 1, 2 and 4 bars")
                 ArcKnob(label: "IN", value: Binding(
                     get: { audio.inputVolume * 100 }, set: { audio.applyInputVolume($0 / 100) }
                 ), range: 0...100, color: Theme.textSecondary, size: 38)
@@ -1696,6 +1859,8 @@ struct TransportBar: View {
                 }
                 .buttonStyle(RetroButtonStyle(tint: Theme.loopGreen, active: audio.masterLimiterEnabled, filled: audio.masterLimiterEnabled))
                 .help(audio.masterLimiterEnabled ? "Master limiter active" : "Master limiter bypassed")
+                .accessibilityLabel("Master limiter")
+                .accessibilityValue(audio.masterLimiterEnabled ? "On" : "Bypassed")
                 Button {
                     if audio.isMonitoring { audio.stopMonitoring() } else { audio.startMonitoring() }
                 } label: {
@@ -1707,6 +1872,8 @@ struct TransportBar: View {
                     .frame(width: 44, height: 44).contentShape(Circle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("Input monitoring")
+                .accessibilityValue(audio.isMonitoring ? "On" : "Off")
             }
         }
         .padding(.horizontal, 28).padding(.vertical, 10)
@@ -1719,7 +1886,11 @@ struct TransportBar: View {
                         border: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 8) {
+                // The glyph is decoration: VoiceOver would otherwise read the SF Symbol's
+                // own description as well as the word beside it ("Play, PLAY"). The button
+                // takes the printed label as its name instead.
                 Image(systemName: icon).font(.system(size: 12))
+                    .accessibilityHidden(true)
                 Text(label).font(.system(size: 11, weight: .medium, design: .monospaced)).tracking(3)
             }
             .frame(height: 44).padding(.horizontal, 18)
@@ -1728,6 +1899,7 @@ struct TransportBar: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(label)
     }
 }
 
@@ -1777,6 +1949,10 @@ struct ReelView: View {
                    ? nil
                    : (spinning ? .linear(duration: fast ? 1.4 : 2.6).repeatForever(autoreverses: false) : .default),
                    value: spinning)
+        // Two drawn circles that mean "a tape is moving". Nothing to read out, and the
+        // transport state it depicts is already spoken by the Rec button and the status
+        // line, so it is decoration.
+        .accessibilityHidden(true)
     }
 }
 
@@ -1928,6 +2104,8 @@ struct ArrangeHeadUnit: View {
                 }
                 .buttonStyle(.plain)
                 .padding(.top, 4)
+                .accessibilityLabel("Loop")
+                .accessibilityValue(audio.loopEnabled ? "On" : "Off")
             }
             .frame(maxWidth: .infinity)
 
@@ -2177,6 +2355,7 @@ struct MonitorView: View {
                         ForEach(audio.inputDevices) { dev in Text(dev.name).tag(Optional(dev.id)) }
                     }
                     .pickerStyle(.menu).labelsHidden()
+                    .accessibilityLabel("Input device")
                 }
                 HStack(spacing: 6) {
                     Text("Output").font(.system(size: 10, weight: .medium, design: .monospaced))
@@ -2188,6 +2367,7 @@ struct MonitorView: View {
                         ForEach(audio.outputDevices) { dev in Text(dev.name).tag(Optional(dev.id)) }
                     }
                     .pickerStyle(.menu).labelsHidden()
+                    .accessibilityLabel("Output device")
                 }
                 Spacer()
                 Text("Volume")
@@ -2361,6 +2541,20 @@ struct TrimEditorView: View {
                         .frame(width: 30, height: h)
                         .contentShape(Rectangle())
                         .position(x: leftX, y: h / 2)
+                        // The handles are invisible 30 pt boxes: the trim points have no
+                        // focusable control at all, and the two edges have to be told
+                        // apart. Each becomes an adjustable element, 1 % of the clip per
+                        // step, in the same units the readouts above use.
+                        .accessibilityElement()
+                        .accessibilityLabel("Trim start")
+                        .accessibilityValue(timeString(audio.trimStart))
+                        .accessibilityAdjustableAction { direction in
+                            switch direction {
+                            case .increment: audio.trimStart = min(audio.trimEnd - 0.01, audio.trimStart + 0.01)
+                            case .decrement: audio.trimStart = max(0, audio.trimStart - 0.01)
+                            @unknown default: break
+                            }
+                        }
                         .gesture(
                             DragGesture(minimumDistance: 1)
                                 .onChanged { g in
@@ -2372,6 +2566,16 @@ struct TrimEditorView: View {
                         .frame(width: 30, height: h)
                         .contentShape(Rectangle())
                         .position(x: rightX, y: h / 2)
+                        .accessibilityElement()
+                        .accessibilityLabel("Trim end")
+                        .accessibilityValue(timeString(audio.trimEnd))
+                        .accessibilityAdjustableAction { direction in
+                            switch direction {
+                            case .increment: audio.trimEnd = min(1, audio.trimEnd + 0.01)
+                            case .decrement: audio.trimEnd = max(audio.trimStart + 0.01, audio.trimEnd - 0.01)
+                            @unknown default: break
+                            }
+                        }
                         .gesture(
                             DragGesture(minimumDistance: 1)
                                 .onChanged { g in
