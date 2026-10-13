@@ -11,7 +11,9 @@
 > | §9 | **macOS platform conformance**, nine stages. | **All nine landed 2026-10-13.** §9.0.1 lists the commits. |
 >
 > **Where the code actually stands.** All of §8's fixes and all nine of §9's stages are in and
-> pushed — `origin/main` is at **`d7a1c7f`** (2026-10-13), and the tree is level with it.
+> pushed. The last **code** commit is **`d7a1c7f`** ("Record Stage 9, and close out §9",
+> 2026-10-13); `origin/main` is level with the tree. (Anything after it is documentation only —
+> naming the tip here would be self-defeating, since writing the line is itself a commit.)
 >
 > **What is genuinely open, in the order it should be done:**
 >
