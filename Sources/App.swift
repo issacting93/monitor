@@ -166,6 +166,44 @@ final class KeyboardShortcutMonitor {
     deinit { remove() }
 }
 
+// ── Window configuration ────────────────────────────────────────────────────
+
+/// Reaches the AppKit window for the handful of things a SwiftUI scene still cannot
+/// express: the window's title, the edited dot in the close button, the represented file,
+/// and a frame that survives a relaunch. Zero-sized and non-interactive — it only ever
+/// runs `apply`.
+///
+/// The work is deferred a turn because `makeNSView` runs before the view is in a window,
+/// so `nsView.window` is still nil at that point.
+private struct WindowConfigurator: NSViewRepresentable {
+    let title: String
+    let edited: Bool
+    let representedURL: URL?
+    let autosaveName: String
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        DispatchQueue.main.async { apply(to: view.window) }
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { apply(to: view.window) }
+    }
+
+    private func apply(to window: NSWindow?) {
+        guard let window else { return }
+        window.title = title
+        window.isDocumentEdited = edited
+        window.representedURL = representedURL
+        // Setting the autosave name installs the restoration behaviour and is not
+        // idempotent in the way the other three are, so it is set once.
+        if window.frameAutosaveName != autosaveName {
+            window.setFrameAutosaveName(autosaveName)
+        }
+    }
+}
+
 // ── Root View ───────────────────────────────────────────────────────────────
 
 struct ContentView: View {
@@ -235,6 +273,13 @@ struct ContentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(DotGridBackground())
         .background(Theme.bg)
+        // The project name, the edited dot and the window's remembered frame. The title
+        // bar is hidden, so none of this is drawn as text — but the title still reaches
+        // the Window menu and Mission Control, and the dot still reaches the close button.
+        .background(WindowConfigurator(title: audio.projectName,
+                                       edited: audio.projectDirty,
+                                       representedURL: audio.projectURL,
+                                       autosaveName: "Tape08MainWindow"))
         .onAppear {
             audio.startMonitoring()
             keyMonitor.install(audio: audio)
@@ -258,18 +303,23 @@ struct MonitorApp: App {
     @StateObject private var audio = AudioManager()
 
     var body: some Scene {
-        WindowGroup {
+        // `Window`, not `WindowGroup`: this app holds one session, and a group hands out
+        // ⌘N, which would put a second window on the same tracks — two views of one
+        // engine, and nothing good to say about which one the user is editing.
+        Window("TAPE 08", id: "main") {
             ContentView(audio: audio)
                 // 1280 rather than 1060: with the widest drawer open the workspace is
                 // pushed right by 400 pt, and the track-header column (200) plus the
                 // control column (`Theme.controlsColumnWidth`, 460) and their gutters
                 // have to survive that before the lane region gets anything. At 1060 the
-                // lanes fell to their floor.
+                // lanes fell to their floor. This is the *minimum*; the opening size is
+                // `defaultSize` below, and after the first run, the autosaved frame.
                 .frame(minWidth: 1280, minHeight: 720)
                 .background(Theme.bg)
                 .onAppear { appDelegate.audio = audio }
         }
         .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1440, height: 900)
     }
 }
 
