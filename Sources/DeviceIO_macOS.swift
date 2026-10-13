@@ -18,9 +18,9 @@ final class CoreAudioDeviceProvider: AudioDeviceProviding {
     func loadDevices() -> (inputs: [AudioDevice], outputs: [AudioDevice]) {
         let ids = allAudioDevices().filter { !isOwnAggregate($0) }
         let inputs = ids.filter { deviceChannelCount($0, input: true) > 0 }
-                        .map { AudioDevice(id: $0, name: nameOfDevice($0)) }
+                        .map { AudioDevice(id: $0, name: nameOfDevice($0), uid: deviceUID($0) ?? "") }
         let outputs = ids.filter { deviceChannelCount($0, input: false) > 0 }
-                         .map { AudioDevice(id: $0, name: nameOfDevice($0)) }
+                         .map { AudioDevice(id: $0, name: nameOfDevice($0), uid: deviceUID($0) ?? "") }
         return (inputs, outputs)
     }
 

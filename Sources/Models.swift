@@ -20,6 +20,16 @@ typealias DeviceID = UInt32
 struct AudioDevice: Identifiable, Hashable {
     let id: DeviceID
     let name: String
+    /// The CoreAudio device UID, which is the only handle on a device that survives a
+    /// relaunch. `id` does not: the HAL hands those out in enumeration order and reuses
+    /// one after its device disappears, so a remembered id can come back pointing at
+    /// something else — or at nothing — the next time the interface is plugged in.
+    ///
+    /// Empty where no UID exists: on iOS, whose session numbers its ports by index, and
+    /// on a macOS device whose UID property couldn't be read. The preference layer
+    /// treats empty as "don't remember, don't restore", so neither case changes
+    /// behaviour — it just doesn't get the convenience.
+    var uid: String = ""
 }
 
 struct TrackClip: Identifiable {

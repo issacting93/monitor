@@ -32,6 +32,8 @@ enum Preferences {
         static let loopEnabled     = "pref.loopEnabled"
         static let timelineZoom    = "pref.timelineZoom"
         static let playheadFollow  = "pref.playheadFollow"
+        static let inputDevice     = "pref.inputDeviceUID"
+        static let outputDevice    = "pref.outputDeviceUID"
     }
 
     /// Bars of count-in before a take starts. 0 = off.
@@ -81,5 +83,23 @@ enum Preferences {
     static var playheadFollow: Bool {
         get { d.object(forKey: Key.playheadFollow) as? Bool ?? true }
         set { d.set(newValue, forKey: Key.playheadFollow) }
+    }
+
+    /// The input device the user last chose, by CoreAudio UID.
+    ///
+    /// Empty means "nothing remembered", which is both the factory state and what iOS
+    /// always reads, since its session exposes no UID. `DeviceController` is the only
+    /// writer and `loadDevices` the only reader, and both skip an empty string: a device
+    /// whose UID couldn't be read is stored as empty, so treating empty as a value to
+    /// match would let one unreadable device silently claim to be the remembered one.
+    static var inputDeviceUID: String {
+        get { d.object(forKey: Key.inputDevice) as? String ?? "" }
+        set { d.set(newValue, forKey: Key.inputDevice) }
+    }
+
+    /// The output device the user last chose, by CoreAudio UID. See `inputDeviceUID`.
+    static var outputDeviceUID: String {
+        get { d.object(forKey: Key.outputDevice) as? String ?? "" }
+        set { d.set(newValue, forKey: Key.outputDevice) }
     }
 }

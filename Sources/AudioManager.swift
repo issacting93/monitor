@@ -272,6 +272,7 @@ class AudioManager: ObservableObject {
     func selectInput(_ id: DeviceID?) {
         guard id != selectedInputID else { return }
         selectedInputID = id
+        device.rememberDevice(id, input: true)
         if isMonitoring { startMonitoring() }
     }
 

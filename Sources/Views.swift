@@ -2122,7 +2122,15 @@ struct MonitorView: View {
                         .foregroundColor(Theme.textSecondary)
                     Picker("", selection: Binding(
                         get: { audio.selectedInputID },
-                        set: { audio.selectedInputID = $0; audio.startMonitoring() }
+                        // The only input picker that assigned the property itself. It is
+                        // routed through `selectInput` now so the choice is remembered
+                        // like the header's and the Settings window's; the explicit start
+                        // below keeps this picker's own behaviour — it always (re)starts,
+                        // because this is the view where you are setting up to listen.
+                        set: { id in
+                            audio.selectInput(id)
+                            if !audio.isMonitoring { audio.startMonitoring() }
+                        }
                     )) {
                         ForEach(audio.inputDevices) { dev in Text(dev.name).tag(Optional(dev.id)) }
                     }

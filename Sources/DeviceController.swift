@@ -47,16 +47,47 @@ final class DeviceController {
 
             if self.manager.selectedInputID == nil
                 || !inputs.contains(where: { $0.id == self.manager.selectedInputID }) {
-                self.manager.selectedInputID = inputs.first(where: { $0.name.localizedCaseInsensitiveContains("XY") })?.id
+                // Remembered device first — ahead of the OP-XY heuristic, which is only
+                // a guess at what the user wants, whereas this is what they said.
+                self.manager.selectedInputID = self.remembered(in: inputs, uid: Preferences.inputDeviceUID)?.id
+                    ?? inputs.first(where: { $0.name.localizedCaseInsensitiveContains("XY") })?.id
                     ?? inputs.first(where: { $0.name.localizedCaseInsensitiveContains("OP") })?.id
                     ?? inputs.first?.id
             }
 
             if self.manager.selectedOutputID == nil
                 || !outputs.contains(where: { $0.id == self.manager.selectedOutputID }) {
-                self.manager.selectedOutputID = self.io.defaultOutputID ?? outputs.first?.id
+                // The system default still comes first here: it is a fresh decision by the
+                // user made in System Settings, and a remembered output that is plugged in
+                // is more often the *monitor* pair they left selected than the interface
+                // they meant to listen through. A remembered device is used only when this
+                // Mac has no opinion of its own.
+                self.manager.selectedOutputID = self.remembered(in: outputs, uid: Preferences.outputDeviceUID)?.id
+                    ?? self.io.defaultOutputID
+                    ?? outputs.first?.id
             }
         }
+    }
+
+    /// The listed device matching a remembered UID, or nil when nothing is remembered or
+    /// that device isn't plugged in. An empty `uid` never matches anything, including an
+    /// entry whose own UID couldn't be read — see `Preferences.inputDeviceUID`.
+    private func remembered(in devices: [AudioDevice], uid: String) -> AudioDevice? {
+        guard !uid.isEmpty else { return nil }
+        return devices.first { $0.uid == uid }
+    }
+
+    /// Records the device a picker settled on, so the next launch can restore it.
+    ///
+    /// Called from the selection paths only, never from `loadDevices`. That distinction is
+    /// the whole point of the method: `loadDevices` runs its fallback whenever the
+    /// remembered device is merely unplugged, so persisting from there would overwrite the
+    /// user's choice with whatever the fallback landed on — permanently, and without them
+    /// ever touching a picker.
+    func rememberDevice(_ id: DeviceID?, input: Bool) {
+        let listed = input ? manager.inputDevices : manager.outputDevices
+        guard let id, let uid = listed.first(where: { $0.id == id })?.uid, !uid.isEmpty else { return }
+        if input { Preferences.inputDeviceUID = uid } else { Preferences.outputDeviceUID = uid }
     }
 
     func setupHardwareListeners() {
@@ -88,6 +119,9 @@ final class DeviceController {
     func switchOutput(to id: DeviceID) {
         guard io.outputSelectionSupported else { return }
         manager.selectedOutputID = id
+        // Remembered here rather than in `AudioManager.selectOutput`, so the monitor
+        // view's output picker — which calls this directly — is covered too.
+        rememberDevice(id, input: false)
         // Restart, because the restart is what makes a separate output real. The engine
         // holds one AUHAL, and `applyEngineDevices` is what reconciles that with an
         // output that differs from the input: it pins the engine to a private
