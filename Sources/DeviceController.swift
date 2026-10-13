@@ -88,8 +88,12 @@ final class DeviceController {
     func switchOutput(to id: DeviceID) {
         guard io.outputSelectionSupported else { return }
         manager.selectedOutputID = id
-        // On macOS the engine's input and output are the same AUHAL, so the output
-        // device follows the selected INPUT device — the OUT picker only labels it.
+        // Restart, because the restart is what makes a separate output real. The engine
+        // holds one AUHAL, and `applyEngineDevices` is what reconciles that with an
+        // output that differs from the input: it pins the engine to a private
+        // input+output aggregate and remaps the AUHAL's output onto the chosen device.
+        // Assigning `selectedOutputID` on its own would leave the audio where it was
+        // while the picker said otherwise.
         if manager.isMonitoring { manager.stopMonitoring(); manager.startMonitoring() }
     }
 

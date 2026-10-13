@@ -215,7 +215,18 @@ final class EngineController {
         let inputLabel = hwFmt.channelCount > 2
             ? "\(inDev.name) (\(hwFmt.channelCount) ch → stereo)"
             : inDev.name
-        m.status = routingWarning ?? "\(inputLabel) → \(m.device.io.currentOutputName)"
+        // Name the device the audio is really going to. `currentOutputName` reports the
+        // system default, which is only the destination when no separate output is
+        // chosen — with one, the engine sits on an input+output aggregate and the audio
+        // reaches that selection, so the default's name would point at a device nothing
+        // is being monitored through.
+        let outputLabel: String
+        if let outID = m.selectedOutputID, outID != inID {
+            outputLabel = m.device.io.displayName(for: outID)
+        } else {
+            outputLabel = m.device.io.currentOutputName
+        }
+        m.status = routingWarning ?? "\(inputLabel) → \(outputLabel)"
         m.sampleRateString = "\(Int(hwFmt.sampleRate / 1000)) kHz · 24-bit · Stereo"
         m.meter.startDisplayTimer()
 
