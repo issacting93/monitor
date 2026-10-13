@@ -5,7 +5,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 APP_NAME="Tape 08"
-BUNDLE_ID="com.opxy.tape08"
+# Same id as the Xcode target (`Tape08/Tape08.xcodeproj/project.pbxproj`), which is the
+# one that ships. It was `com.opxy.tape08` here and the two builds disagreed; §9 listed
+# settling it as the one item in that stage that cannot be changed after shipping. The
+# `com.opxy.*` strings elsewhere are effect *registry keys* — they are written into saved
+# projects and must not be renamed to match this.
+BUNDLE_ID="com.tape08.app"
 EXECUTABLE="Tape08"
 SOURCES=(Sources/*.swift)
 BUILD_DIR=".build"          # a repo-root dir named Tape08/ exists, so build the binary here
@@ -31,38 +36,103 @@ mkdir -p "${MACOS}" "${RESOURCES}"
 mv "${BUILD_DIR}/${EXECUTABLE}" "${MACOS}/${EXECUTABLE}"
 
 # Info.plist
+#
+# Kept in step, key for key, with the Xcode target's `Tape08/Tape08/Info.plist` — §9's
+# Stage 5 existed because the two had drifted: this one had no document types, no
+# category and no exported UTI, so the dev build did not claim `.xyproj` at all and the
+# shipping build did. Two builds of one app that behave differently in Finder is a bug
+# report waiting to be filed against the wrong one.
+#
+# Three keys differ on purpose, all of them about *where the resources are* rather than
+# what the app is:
+#   CFBundleIconFile vs CFBundleIconName  this path has no asset catalog, so the icon is
+#                                         the generated `AppIcon.icns` in Resources; the
+#                                         Xcode target has `Assets.xcassets` and names it
+#   NSPrincipalClass, LSUIElement          needed (and harmless) for a hand-assembled
+#                                         bundle, which this is
 cat > "${CONTENTS}/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+    <key>CFBundleExecutable</key>
+    <string>${EXECUTABLE}</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundleIdentifier</key>
+    <string>${BUNDLE_ID}</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
     <key>CFBundleName</key>
     <string>TAPE 08</string>
     <key>CFBundleDisplayName</key>
-    <string>${APP_NAME}</string>
-    <key>CFBundleIdentifier</key>
-    <string>${BUNDLE_ID}</string>
-    <key>CFBundleVersion</key>
-    <string>1</string>
-    <key>CFBundleShortVersionString</key>
-    <string>1.0.0</string>
-    <key>CFBundleExecutable</key>
-    <string>${EXECUTABLE}</string>
+    <string>TAPE 08</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
-    <key>CFBundleIconFile</key>
-    <string>AppIcon</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
+    <key>ITSAppUsesNonExemptEncryption</key>
+    <false/>
     <key>NSMicrophoneUsageDescription</key>
-    <string>TAPE 08 needs microphone access to receive audio from your USB input device.</string>
+    <string>TAPE 08 needs microphone access to monitor and record audio from your USB instruments and audio interfaces.</string>
     <key>NSHumanReadableCopyright</key>
     <string>Copyright © 2026. All rights reserved.</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.music</string>
+    <key>NSApplicationSupportsSecureRestorableState</key>
+    <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>LSUIElement</key>
     <false/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>TAPE 08 Project</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>xyproj</string>
+            </array>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.tape08.xyproj</string>
+            </array>
+            <key>LSTypeIsPackage</key>
+            <true/>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>com.tape08.xyproj</string>
+            <key>UTTypeDescription</key>
+            <string>TAPE 08 Project</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>com.apple.package</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>xyproj</string>
+                </array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>
 PLIST

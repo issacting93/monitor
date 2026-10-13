@@ -13,9 +13,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Tape 08</string>
+	<string>TAPE 08</string>
 	<key>CFBundleDisplayName</key>
-	<string>Tape 08</string>
+	<string>TAPE 08</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -27,24 +27,67 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Tape 08 needs microphone access to monitor and record audio from your USB instruments and audio interfaces.</string>
+	<string>TAPE 08 needs microphone access to monitor and record audio from your USB instruments and audio interfaces.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026. All rights reserved.</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.music</string>
+	<!-- Absent, macOS 14 logs a warning at every launch. True is the value Xcode's own
+	     app template ships: this app has no custom restorable state of its own to encode
+	     (the window frame is `NSWindow` autosave, which is a separate mechanism), and what
+	     SwiftUI's scene restoration does encode goes through secure coding. -->
+	<key>NSApplicationSupportsSecureRestorableState</key>
+	<true/>
 	<key>CFBundleDocumentTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>Tape 08 Project</string>
+			<string>TAPE 08 Project</string>
 			<key>CFBundleTypeExtensions</key>
 			<array>
 				<string>xyproj</string>
 			</array>
+			<!-- The modern half of the same declaration, and the one the system actually
+			     reads: `CFBundleTypeExtensions` above is legacy but stays for older
+			     LaunchServices paths. The role and rank say this app is the one that
+			     opens the type - which is only true because `AppDelegate` now handles
+			     `application(_:open:)`. See `UTExportedTypeDeclarations` below. -->
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.tape08.xyproj</string>
+			</array>
+			<key>LSTypeIsPackage</key>
+			<true/>
 			<key>CFBundleTypeRole</key>
 			<string>Editor</string>
 			<key>LSHandlerRank</key>
 			<string>Owner</string>
+		</dict>
+	</array>
+	<!-- Without this the system invents a private dynamic UTI for `.xyproj` per machine,
+	     so the extension means whatever that machine guessed and nothing can reference
+	     the type by name. `com.apple.package` is the conformance that matters: a project
+	     is a directory holding `project.json` plus an `Audio/` tree, which is what a
+	     package is, and it is what makes Finder show the folder as one document rather
+	     than as something to browse into. (Show Package Contents still opens it.) -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.tape08.xyproj</string>
+			<key>UTTypeDescription</key>
+			<string>TAPE 08 Project</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>xyproj</string>
+				</array>
+			</dict>
 		</dict>
 	</array>
 </dict>
