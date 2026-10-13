@@ -57,6 +57,16 @@ class AudioManager: ObservableObject {
         return 0
     }
 
+    /// Closes whichever drawer is open, if any.
+    ///
+    /// Escape is the only caller. The two buttons *toggle*, so routing Escape through
+    /// them would make a press with nothing open spring a drawer open; closing is all
+    /// Escape may ever do.
+    func closeOpenDrawer() {
+        showEffects = false
+        showSettings = false
+    }
+
     // Effect chain presets
     @Published var presetNames: [String] = []
     @Published var showPresetSave = false

@@ -405,6 +405,23 @@ struct ContentView: View {
                                        edited: audio.projectDirty,
                                        representedURL: audio.projectURL,
                                        autosaveName: "Tape08MainWindow"))
+        // Escape backs out of the innermost thing that is open, one press each: the trim
+        // editor, then a drawer, then the take selection. `.onExitCommand` rather than a
+        // case in KeyboardShortcutMonitor, because the monitor hands back every event it
+        // doesn't claim and a focused text field has first call on Escape — a raw NSEvent
+        // branch would cancel a trim out from under a field the user is mid-way through.
+        .onExitCommand {
+            if audio.trimmingTrack != nil {
+                audio.cancelTrim()
+            } else if audio.showEffects || audio.showSettings {
+                audio.closeOpenDrawer()
+            } else {
+                // Last resort, and safe when nothing is selected: clearing an already-nil
+                // selection publishes a change but leaves the resolved edit target on the
+                // track's last take, which is what it would have been anyway.
+                audio.selectedClipID = nil
+            }
+        }
         .onAppear {
             audio.startMonitoring()
             keyMonitor.install(audio: audio)

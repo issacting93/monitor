@@ -499,6 +499,18 @@ struct WaveformLaneView: View {
     private var hasClip: Bool { !track.clips.isEmpty }
     private var isSelected: Bool { audio.selectedTrack == index }
 
+    /// Makes `clip` the take that edits resolve to, exactly as clicking it does.
+    ///
+    /// The clip's context menu needs this because a right-click does not run the click
+    /// gesture below, and every command in that menu resolves through `editTargetIndex`,
+    /// which reads the selection — so without it they would act on whichever take was
+    /// selected before the right-click, while appearing to act on the one under the
+    /// pointer.
+    private func target(_ clip: TrackClip) {
+        audio.selectedTrack = index
+        audio.selectedClipID = clip.id
+    }
+
     var body: some View {
         let barWidth = laneWidth / CGFloat(totalBars)
         ZStack(alignment: .leading) {
@@ -581,6 +593,35 @@ struct WaveformLaneView: View {
                             audio.selectedClipID = clip.id
                         }
                     )
+                    // The menu-bar commands, cut down to the ones a take can answer —
+                    // per §9.5 a context menu is the relevant subset of those, not a
+                    // second command set that has to be kept in step by hand.
+                    .contextMenu {
+                        Button("Trim…") { target(clip); audio.openTrimEditor(index) }
+                            .disabled(audio.busyEdit != nil)
+                        Button("Split at Playhead") { target(clip); audio.splitClipAtPlayhead(index) }
+                            .disabled(audio.busyEdit != nil)
+                        // Duplicate takes the index, so it needs no re-targeting and
+                        // cannot be pointed at the wrong take.
+                        Button("Duplicate") { audio.duplicateClip(index, clipIndex: ci) }
+                            .disabled(audio.busyEdit != nil)
+                        // The track's export, not the take's: there is no per-take export,
+                        // so the label says track rather than implying one exists.
+                        Button("Export Track…") { audio.exportTrack(index) }
+                            .disabled(audio.busyEdit != nil)
+
+                        Divider()
+
+                        Menu("Select Take") {
+                            ForEach(1...8, id: \.self) { n in
+                                Button("Take \(n)") {
+                                    target(clip)
+                                    audio.selectClip(number: n)
+                                }
+                                .disabled(n > track.clips.count)
+                            }
+                        }
+                    }
                     .offset(x: clipX + 1, y: 1)
                 }
 
@@ -725,6 +766,46 @@ struct TrackControlsView: View {
         }
         .padding(.horizontal, 10)
         .frame(width: Theme.controlsColumnWidth)
+        // The same Track commands the menu bar carries, minus the ones that only make
+        // sense for the selected track as a whole. "Clear All Tracks" is deliberately
+        // absent: this menu is about one track, and offering a command that wipes all
+        // eight from here would be a trap.
+        .contextMenu {
+            // Reading the global flag rather than the track's own state, because
+            // `toggleTrackRecord` stops whatever take is running wherever it is — so if
+            // anything is recording, the honest label is "Stop Recording".
+            Button(audio.isRecording ? "Stop Recording" : "Record on This Track") {
+                audio.toggleTrackRecord(index)
+            }
+            .disabled(audio.busyEdit != nil)
+
+            Divider()
+
+            // Toggles rather than assignments: `toggleMute`/`toggleSolo` are what push
+            // undo and refresh the mixers, so the binding's new value is discarded.
+            Toggle("Mute", isOn: Binding(
+                get: { track.muted },
+                set: { _ in audio.toggleMute(index) }
+            ))
+            Toggle("Solo", isOn: Binding(
+                get: { track.solo },
+                set: { _ in audio.toggleSolo(index) }
+            ))
+
+            Divider()
+
+            Menu("Select Take") {
+                ForEach(1...8, id: \.self) { n in
+                    Button("Take \(n)") {
+                        // `selectClip` works on the selected track, so the track has to
+                        // be selected first for a right-click here to mean this one.
+                        audio.selectedTrack = index
+                        audio.selectClip(number: n)
+                    }
+                    .disabled(n > track.clips.count)
+                }
+            }
+        }
     }
 }
 
@@ -1502,6 +1583,20 @@ struct TransportBar: View {
             }
             .font(.system(size: 8, weight: .medium, design: .monospaced))
             .foregroundColor(Theme.textTertiary.opacity(0.6))
+            }
+            // The transport half of the Transport menu. Return to Start earns its place
+            // here because it now seeks rather than stopping, so it is genuinely a
+            // different command from Play/Stop.
+            .contextMenu {
+                Button(audio.isPlaying ? "Stop" : "Play") {
+                    if audio.isPlaying { audio.stopAll() } else { audio.playAll() }
+                }
+                Button("Record") { audio.toggleTrackRecord(audio.selectedTrack) }
+                    .disabled(audio.busyEdit != nil)
+
+                Divider()
+
+                Button("Return to Start") { audio.seek(toFraction: 0) }
             }
 
             Spacer()
