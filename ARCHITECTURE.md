@@ -8,7 +8,7 @@ shared audio core.
 - **UI:** SwiftUI (separate macOS and iPad view layers)
 - **Audio:** AVFoundation (`AVAudioEngine`) + CoreAudio HAL / `AVAudioSession` (device layer) +
   CoreMIDI (track follow)
-- **Source:** 25 files in `Sources/`, 8,793 lines (shared core + both UIs)
+- **Source:** 25 files in `Sources/`, 8,852 lines (shared core + both UIs)
 - **Build paths:** `package.sh` (macOS, head-less `swiftc`), `Tape08/` (macOS Xcode project),
   `Tape08iPad/` (iPad Xcode project)
 
@@ -55,7 +55,11 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
   metronome node, so the clicks stay in phase with a track already looping; STOP aborts it. With the
   metronome switched off there is no grid to observe and the count falls back to the wall clock
   (silent either way).
-- Elapsed-time display; on stop the take becomes a new clip on the selected track.
+- Elapsed-time display; on stop the take is filed off the main thread — the peak decode reads the
+  whole file — and becomes a new clip on the selected track. When the stop came from a REC press the
+  track then starts looping, and that loop start **rides the filing**: it fires only once the new
+  take's buffer is cached, so it can neither bail on an empty track (a first take) nor schedule the
+  *previous* take's audio (a later one). A STOP during the filing cancels it.
 - Recording vs FX: takes are dry by design; effects are heard live but not printed.
 
 ### 1.5 Metronome & tempo
@@ -100,6 +104,12 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
   | Noise Gate | custom kernel | Dynamics |
 
 - Add / remove / reorder / bypass; each module's parameters auto-render as knobs.
+- **Bypass is the audio unit's own job.** `AVAudioEngine` honours `AVAudioUnitEffect.bypass` for
+  Apple's units but **not** for a custom AUv3 — the render block is still called — so
+  `EffectAudioUnit` overrides `shouldBypassEffect` to record the state and consults it in its render
+  block, pulling the input through unprocessed. Setting only `effect.bypass` (what the app did until
+  2026-10-12) left every custom kernel processing the monitor path whatever its slot said.
+  `setNodeBypass` sets both properties, one per kind of unit.
 - **Presets**: built-in (`Clean`, `Warm`, `Ambient`, `Lo-Fi`) plus user presets, stored as JSON in
   `~/Library/Application Support/Tape08/Presets/`.
 
@@ -375,6 +385,10 @@ Checks used throughout: `swiftc -typecheck -parse-as-library Sources/*.swift` fo
 `arm64-apple-macosx14.0` and `arm64-apple-ios17.0-simulator`, plus `xcodebuild … -scheme Tape08
 build` (macOS). Building the iPad target needs the iOS platform installed in Xcode.
 
+Nothing outside `Sources/` is a build input — all three synchronized groups are scoped to it — so
+`Fixtures/` (generated test inputs for the §8.6 checks, built by `Fixtures/make-h6-fixture.sh`) and
+`Tools/` cannot end up in the app.
+
 ---
 
 ## 4. File map
@@ -384,18 +398,18 @@ build` (macOS). Building the iPad target needs the iOS platform installed in Xco
 | File | Lines | Platform | Responsibility |
 |------|------:|----------|----------------|
 | `Views.swift` | 2529 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
-| `TransportController.swift` | 1193 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
+| `TransportController.swift` | 1203 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
 | `EffectsKernels.swift` | 763 | shared | Custom DSP kernels |
-| `EffectsCore.swift` | 480 | shared | Module/registry/chain/AU-host core + Apple module defs |
+| `EffectsCore.swift` | 501 | shared | Module/registry/chain/AU-host core + Apple module defs |
 | `Views_iOS.swift` | 463 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
-| `AudioManager.swift` | 381 | shared | The `ObservableObject` facade: published state + forwarders |
+| `AudioManager.swift` | 387 | shared | The `ObservableObject` facade: published state + forwarders |
 | `EngineController.swift` | 339 | shared | `AVAudioEngine` graph spine + async kernel insert |
-| `RecordingController.swift` | 332 | shared | Count-in (click-grid aligned) + dry capture |
+| `RecordingController.swift` | 344 | shared | Count-in (click-grid aligned) + dry capture |
 | `MetronomeController.swift` | 324 | shared | Click scheduling, beat observation + tap tempo |
 | `ProjectController.swift` | 318 | shared (`[mac]` panels) | `.xyproj` save/load |
-| `App.swift` | 272 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
+| `App.swift` | 273 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
 | `CoreAudioDevices.swift` | 217 | `[mac]` | CoreAudio HAL enumeration/selection helpers + the aggregate device for clock-master I/O |
-| `EffectsChainController.swift` | 193 | shared | Chain mutations + presets |
+| `EffectsChainController.swift` | 202 | shared | Chain mutations + presets |
 | `MeterController.swift` | 168 | shared | Meter taps + display smoothing |
 | `DeviceController.swift` | 137 | shared | Device discovery + MIDI track follow (delegates to `io`) |
 | `DeviceIO_iOS.swift` | 104 | `[iOS]` | `AVAudioSession` provider + route/interruption observers |
@@ -466,6 +480,23 @@ counted in the load status), **UI-1** (drawers push the workspace right and are 
 **UI-5** (hit targets grown to 44 pt where the layout allows — one deliberate exception, the grid's
 zoom/follow trio, is 44 × 18 because a taller target has nowhere to go) and **CL-1** (the dead-code
 sweep, plus keyboard bindings matched by printed character rather than key position).
+
+Two more, reported against the built app on 2026-10-12 after the deferred list had landed.
+**Bypass** — the symptom was an audible phasing effect with no effect enabled: every slot is spliced
+into the graph whether or not it is enabled, and bypass had been set with
+`AVAudioUnitEffect.bypass`, which `AVAudioEngine` does not honour for a custom AUv3, so the eleven
+kernel modules processed the monitor path whatever their slot state. Measured offline at the time,
+the default chain swung a steady 1 kHz sine by **1168%** — flanger alone 634%, chorus 68% — while
+the three Apple units on the identical call measured **0.0000**, which is what isolated it to the
+custom AU host. The unit now implements the bypass itself. A side effect is that ON/BYP had never
+done anything audible for those modules; it does now. This one traces to the original
+`monitor.swift`, so it was never a regression. **Record → loop** — a take did not play back:
+`toggleTrackRecord` started the loop synchronously while the take was still being filed off-main, so
+a first take hit `startTrackLoop`'s empty-track guard and never played at all, and a later take
+looped the *previous* take's cached buffer. The loop start now rides the filing completion, with a
+new `transportEpoch` so a STOP during that read cannot start a loop on a track the user has just
+silenced. The deferred append predates `C4b`, which only widened the window from one main-queue hop
+to a full file read.
 
 Stage 0d's clock-master change for aggregate I/O has **not** been run on hardware.
 

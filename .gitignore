@@ -19,5 +19,8 @@ xcuserdata/
 # Recordings
 *.wav
 
+# Generated test fixtures (Fixtures/make-h6-fixture.sh rebuilds these on demand)
+Fixtures/build/
+
 # macOS
 .DS_Store

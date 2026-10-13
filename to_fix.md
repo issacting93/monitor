@@ -641,7 +641,16 @@ an export.
 Run `open "Tape 08.app"` and walk this matrix; it is the part the refactor could not self-verify:
 
 - **Lifecycle & permissions** — first-run mic prompt, deny→message, start/stop, feedback warning.
-- **Capture** — record a take, hear it back; confirm the take is **dry** (pre-FX).
+- **Capture** — record a take, hear it back; confirm the take is **dry** (pre-FX). **Record → loop
+  (2026-10-12, `3628f54`)** — check this as **two** cases, because a first take and a later take
+  failed differently and only one of them was the silent one: (a) press REC on an **empty** track,
+  record, press REC to stop — the take must **loop**, and until `3628f54` it did nothing at all,
+  because `startTrackLoop` ran before the clip existed and bailed on its own guard; (b) press REC
+  again on that **same** track — the new take must loop, and before the fix you would have heard the
+  **previous** take instead, since the loop scheduled the stale cached buffer. Also check the STOP
+  interaction, which is what `transportEpoch` was added for: start a take, press REC to stop, and hit
+  STOP during the "Saving…" moment — no loop must start afterwards on a track you have just
+  silenced. Works the same from the per-track REC arm and from either transport bar.
 - **Count-in (U1, rewritten 2026-10-12)** — with the metronome on, 1/2/4-bar count-in: **bar 1 of the
   count must carry the accent**, and recording must start on the downbeat that ends the count, not
   near it. The count rides the click grid now instead of a `240/BPM × bars` timer, so the three
@@ -668,12 +677,30 @@ Run `open "Tape 08.app"` and walk this matrix; it is the part the refactor could
   due. Nudge the tempo up and down a few times in a row; the phase should walk, not hiccup.
 - **Metering** — L/R RMS + peak-hold + dB readout; per-track meters; check for UI hitching under load (P1).
 - **Effects** — add/remove/reorder/bypass each of the 13 modules; sweep knobs and confirm audible
-  change (C1); save/load a preset; confirm built-ins survive a relaunch (H4).
+  change (C1); save/load a preset; confirm built-ins survive a relaunch (H4). **Bypass (2026-10-12,
+  `9cf47ca`) — listen to this one specifically.** `setNodeBypass` set only `AVAudioUnitEffect.bypass`,
+  which AVAudioEngine honours for Apple's three units but **not** for a custom AUv3: for the eleven
+  kernel modules the render block ran regardless, so ON/BYP had never done anything audible. The
+  unit now implements the bypass itself, in its render block. Measured offline before the fix, on a
+  steady 1 kHz sine through the default chain: flanger swung the signal **634%**, chorus 68%, tremolo
+  62%, compressor 12%, phaser 2.2%, distortion and tape-saturation changed the RMS outright, and the
+  three Apple units on the identical call measured **0.0000** — the control that isolated it to the
+  custom AU host. Post-fix every module measures 0.00% bypassed and identical to before when enabled.
+  So: toggle ON/BYP on each of the eleven kernel modules and confirm the effect actually drops out,
+  and confirm an enabled module still processes. This is a behaviour change, not a repair — the
+  buttons did nothing before, so there is no prior behaviour to preserve.
 - **Project** — save → quit → reopen `.xyproj`; verify tracks, volumes, chain, BPM; test a missing
-  audio file (reports count, still loads). **Tampered manifest (H6, 2026-10-12):** hand-edit a
-  `project.json` so a `relativePath` contains `../` — the load must report those clips among the
-  missing ones and must read nothing outside the package. A path that is absolute, empty, `.`/`..`,
-  or that escapes via a symlink inside the package must all be rejected the same way.
+  audio file (reports count, still loads). **Tampered manifest (H6, 2026-10-12, `ab46dd5`):** run
+  `./Fixtures/make-h6-fixture.sh`, then Open Project → `Fixtures/build` → `H6-Tampered.xyproj`. The
+  status line must read **`Loaded H6-Tampered (1 missing file, 6 paths outside the project)`**,
+  track 1 must hold one clip, and tracks 2+ must be empty. The fixture carries all six hostile
+  shapes — traversal, absolute, empty, `.`, `..`, and a symlink inside the package pointing out of
+  it — each aimed at a file that **exists** (the traversal target is real audio, an octave below the
+  good take, so a regression is *heard*), which is what makes a pass meaningful. If the guard
+  regresses you would instead hear that second tone on track 2. `Fixtures/README.md` has the
+  case-by-case table. Note the two failure kinds are reported **separately** — "N missing files" is
+  a moved project, "M paths outside the project" is a hand-edited manifest, and a status line that
+  folds them into one count is a regression of `ab46dd5` itself.
 - **Editing** — undo/redo across trim/split/duplicate/import/volume/mute/solo; verify files on disk
   after undo/clear (H3).
 - **Edits in flight (C4)** — with a long take, start trim / split / duplicate / import / record-stop
@@ -776,6 +803,31 @@ header's top edge, so the parent `HStack` refuses the hit test, and below it is 
 button, which as the later sibling wins any overlap. Widening was the only axis with room. It is
 documented in the code comment at `Views.swift:835` and called out in §8.6 as the one target to
 check with a pointer.
+
+**Landed 2026-10-12, after the batch above** — two defects reported against the built app rather
+than found by a compiler, both fixed once the deferred list had already landed. Listed separately
+because neither is part of it:
+
+| Commit | What changed | Verified by |
+|---|---|---|
+| `9cf47ca` | bypass — a slot's DSP runs only when the slot is on | **hardware-confirmed**; offline measurement put every module at 0.00% bypassed (§8.6) |
+| `3628f54` | record — a take's loop starts when the take is *filed*, not at the REC press | compile only; needs a first take **and** a second take on one track (§8.6) |
+
+The first is the phasing report: every slot is spliced into the graph whether or not it is enabled,
+and bypass had been set with `AVAudioUnitEffect.bypass`, which AVAudioEngine does not honour for a
+custom AUv3 — so the eleven kernel modules processed the monitor path whatever the slot said. Its
+side effect is that ON/BYP had never done anything audible for those modules; it does now, which is
+why §8.6's Effects row is worth *listening* to rather than ticking.
+
+The second is "the recorded sound doesn't playback when I record a new track". `toggleTrackRecord`
+called `startTrackLoop(i)` synchronously after `stopRecording()`, but the clip is filed off-main —
+the peak decode is a full read of the file — so on a **first** take the `!clips.isEmpty` guard failed
+and nothing ever played, and on a **later** take the loop started against the *previous* take's
+cached buffer, so you heard the old one. One cause, two faces. The loop start now rides the filing
+completion, and a new `transportEpoch` stops a STOP during that read from starting a loop the user
+has already silenced. This was **not** a regression from `C4b`: the pre-`532c21b` source shows the
+append was already dispatched, so the window is old — `C4b` widened it from one main-queue hop to a
+full file read, which is what made it reproducible.
 
 ## 8.8 Section 2 rebaseline
 
