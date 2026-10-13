@@ -184,6 +184,23 @@ struct Tape08Commands: Commands {
 
     var body: some Commands {
 
+        // ── The app menu ────────────────────────────────────────────────────
+        // Replaces the stock About item, which shows the version and nothing else. This
+        // one carries the credits too, and the tape saturation kernel is a port of an
+        // MIT-licensed Airwindows plugin — the notice has to travel with the app, so
+        // `AboutPanel` puts the full text inside the binary. See `AboutPanel.swift`.
+        CommandGroup(replacing: .appInfo) {
+            Button("About TAPE 08") { AboutPanel.show() }
+        }
+
+        // Replaces the stock "TAPE 08 Help" item, which points at a help book this app
+        // does not have and would open an empty Help window. The credits block *is* the
+        // licence text, so this opens it rather than growing a second copy in a bespoke
+        // window — `CREDITS.md` in the repository holds the same text for readers.
+        CommandGroup(replacing: .help) {
+            Button("Credits and Licences") { AboutPanel.show() }
+        }
+
         // ── File ────────────────────────────────────────────────────────────
         // `.newItem` is the placement SwiftUI reserves for the top of the File menu.
         // `Window`, not `WindowGroup`, means there is no New Window to replace.

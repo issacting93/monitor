@@ -44,9 +44,9 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key>
     <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>1</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.0.0</string>
     <key>CFBundleExecutable</key>
     <string>${EXECUTABLE}</string>
     <key>CFBundlePackageType</key>
@@ -57,6 +57,8 @@ cat > "${CONTENTS}/Info.plist" <<PLIST
     <string>14.0</string>
     <key>NSMicrophoneUsageDescription</key>
     <string>TAPE 08 needs microphone access to receive audio from your USB input device.</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026. All rights reserved.</string>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>LSUIElement</key>
