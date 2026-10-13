@@ -270,6 +270,7 @@ struct TempoControl: View {
             .buttonStyle(.plain)
             .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.16), lineWidth: 1))
             .accessibilityLabel("Decrease tempo")
+            .help("Slower by 1 BPM")
 
             VStack(spacing: 2) {
                 Text("\(Int(audio.metronomeBPM))")
@@ -299,6 +300,7 @@ struct TempoControl: View {
             .buttonStyle(.plain)
             .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.16), lineWidth: 1))
             .accessibilityLabel("Increase tempo")
+            .help("Faster by 1 BPM")
 
             Button { audio.tapTempo() } label: {
                 Text("TAP")
@@ -314,6 +316,7 @@ struct TempoControl: View {
             .animation(.easeOut(duration: 0.06), value: audio.tapTempoFlash)
             .accessibilityLabel("Tap tempo")
             .accessibilityHint("Tap repeatedly to set the tempo")
+            .help("Tap in time with the music to set the tempo")
         }
         .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.16), lineWidth: 1))
     }
@@ -773,6 +776,10 @@ struct TrackControlsView: View {
             // make the row's four controls tell apart.
             .accessibilityLabel("Track \(index + 1) playback")
             .accessibilityValue(track.isPlaying ? "Playing" : "Stopped")
+            .help(track.clips.isEmpty
+                  ? "Nothing recorded on track \(index + 1) yet"
+                  : (track.isPlaying ? "Stop track \(index + 1)"
+                                     : "Play track \(index + 1) on its own"))
 
             Button { audio.toggleMute(index) } label: {
                 // The `filled:` state below already inverts this button in greyscale —
@@ -791,6 +798,7 @@ struct TrackControlsView: View {
             .accessibilityLabel("Mute track \(index + 1)")
             .accessibilityValue(track.muted ? "Muted" : "Not muted")
             .accessibilityAddTraits(track.muted ? [.isSelected] : [])
+            .help("Mute track \(index + 1) (M)")
 
             Button { audio.toggleSolo(index) } label: {
                 // Underline rather than a strike, so solo and mute are distinguishable
@@ -805,6 +813,7 @@ struct TrackControlsView: View {
             .accessibilityLabel("Solo track \(index + 1)")
             .accessibilityValue(track.solo ? "Soloed" : "Not soloed")
             .accessibilityAddTraits(track.solo ? [.isSelected] : [])
+            .help("Solo track \(index + 1) (S) \u{2014} silences every other track")
 
             TrackFader(
                 value: Binding(
@@ -816,6 +825,7 @@ struct TrackControlsView: View {
             )
             .frame(width: 80, height: 20)
             .accessibilityLabel("Track \(index + 1) volume")
+            .help("How loud track \(index + 1) sits in the mix")
 
             // Same as the pan readout below: the fader to its left already speaks this
             // number, so reading it again would just say it twice.
@@ -845,6 +855,7 @@ struct TrackControlsView: View {
                                 ? "Centre"
                                 : (track.pan < 0 ? "\(Int(abs(track.pan) * 100)) percent left"
                                                  : "\(Int(track.pan * 100)) percent right"))
+            .help("Where track \(index + 1) sits between the speakers")
             Text("R")
                 .font(.system(size: 8, weight: .medium, design: .monospaced))
                 .foregroundColor(Theme.textTertiary)
@@ -1097,6 +1108,7 @@ struct LoopGridView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Zoom timeline out")
+                        .help("Fit more of the timeline on screen (\u{2318}\u{2212})")
 
                         Text("\(Int(audio.timelineZoom * 100))%")
                             .font(.system(size: 8, weight: .medium, design: .monospaced))
@@ -1112,6 +1124,7 @@ struct LoopGridView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Zoom timeline in")
+                        .help("See the waveform in finer detail (\u{2318}+)")
 
                         Spacer()
 
@@ -1185,6 +1198,7 @@ struct LoopGridView: View {
                         // lose it for everyone else, so it is carried into the value the
                         // same way, in words.
                         .accessibilityHint(audible ? "" : "Inaudible")
+                        .help("Select track \(String(format: "%02d", i + 1)) \u{2014} the transport, FX chain and edit keys act on it (\u{2318}\(i + 1))")
                     }
                 }
 
@@ -1392,6 +1406,7 @@ struct SideEffectsPanelView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help("Add an effect to the end of track \(audio.selectedTrack + 1)'s chain")
             }
             .padding(.horizontal, 12).padding(.vertical, 10)
 
@@ -1423,6 +1438,9 @@ struct SideEffectsPanelView: View {
                 .accessibilityLabel("Load preset")
                 .accessibilityValue(audio.presetNames.isEmpty ? "None saved" : "")
                 .accessibilityHint("Chooses a saved effect chain")
+                .help(audio.presetNames.isEmpty
+                      ? "No saved chains yet \u{2014} SAVE stores the current one"
+                      : "Replace this chain with a saved one")
 
                 if audio.showPresetSave {
                     TextField("Name", text: $audio.presetSaveName)
@@ -1460,6 +1478,7 @@ struct SideEffectsPanelView: View {
                     .foregroundColor(Theme.loopGreen)
                     .overlay(RoundedRectangle(cornerRadius: 6).stroke(Theme.loopGreen.opacity(0.3), lineWidth: 1))
                     .buttonStyle(.plain)
+                    .help("Store this chain under a name you can load later")
                 }
 
                 Spacer()
@@ -1480,6 +1499,7 @@ struct SideEffectsPanelView: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Delete a saved preset")
+                    .help("Forget a saved chain")
                 }
             }
             .padding(.horizontal, 12).padding(.bottom, 8)
@@ -1582,6 +1602,7 @@ struct SideEffectsPanelView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Move \(mod.displayName) earlier in the chain")
+                        .help("Move \(mod.displayName) earlier \u{2014} nearer the input")
                     }
                     if index < audio.liveChain.count - 1 {
                         Button { audio.moveSlot(from: index, to: index + 1) } label: {
@@ -1593,6 +1614,7 @@ struct SideEffectsPanelView: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Move \(mod.displayName) later in the chain")
+                        .help("Move \(mod.displayName) later \u{2014} nearer the fader")
                     }
                 }
 
@@ -1614,6 +1636,9 @@ struct SideEffectsPanelView: View {
                 .accessibilityLabel("\(mod.displayName) enabled")
                 .accessibilityValue(slot.enabled ? "On" : "Bypassed")
                 .accessibilityHint("Toggles this effect")
+                .help(slot.enabled
+                      ? "Bypass \(mod.displayName) without removing it"
+                      : "Bring \(mod.displayName) back into the chain")
 
                 // Delete
                 Button { audio.removeSlot(at: index) } label: {
@@ -1625,6 +1650,7 @@ struct SideEffectsPanelView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Remove \(mod.displayName) from the chain")
+                .help("Remove \(mod.displayName) from the chain")
             }
             // 5 rather than 10/8: the row's tallest child just went from 24 to 32 pt, and
             // a 12-slot chain cannot afford to grow 8 pt per slot. The padding pays for it,
@@ -1698,12 +1724,14 @@ struct TransportBar: View {
                     audio.undo()
                 }
                 .disabled(!audio.canUndo)
+                .help("Undo the last edit (\u{2318}Z)")
                 tpBtn(icon: "arrow.uturn.forward", label: "REDO",
                       fg: audio.canRedo ? Theme.textPrimary : Theme.textTertiary,
                       border: Theme.textPrimary.opacity(audio.canRedo ? 0.16 : 0.06)) {
                     audio.redo()
                 }
                 .disabled(!audio.canRedo)
+                .help("Redo the last undone edit (\u{21E7}\u{2318}Z)")
                 tpBtn(icon: audio.isPlaying ? "pause.fill" : "play.fill",
                       label: audio.isPlaying ? "PAUSE" : "PLAY",
                       fg: audio.isPlaying ? Theme.bg : Theme.accent,
@@ -1711,6 +1739,7 @@ struct TransportBar: View {
                       border: Theme.accent) {
                     if audio.isPlaying { audio.stopAll() } else { audio.playAll() }
                 }
+                .help(audio.isPlaying ? "Pause playback (Space)" : "Play every unmuted track (Space)")
 
                 Button {
                     if audio.isRecording { audio.stopRecording(loopWhenFiled: true) }
@@ -1735,9 +1764,15 @@ struct TransportBar: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(audio.isRecording ? "Stop recording" : "Record")
                 .accessibilityValue(audio.countingIn ? "Counting in" : "")
+                .help(audio.isRecording
+                      ? "Finish this take and file it (R)"
+                      : (audio.countingIn
+                         ? "Press again to restart the count-in"
+                         : "Record onto track \(audio.selectedTrack + 1) (R)"))
 
                 tpBtn(icon: "stop.fill", label: "STOP",
                       fg: Theme.textPrimary, border: Theme.textPrimary.opacity(0.16)) { audio.stopAll() }
+                .help("Stop playback and return to the start (\u{21A9})")
 
                 Button { audio.clearAll() } label: {
                     Text("CLEAR").font(.system(size: 11, weight: .medium, design: .monospaced)).tracking(3)
@@ -1747,6 +1782,7 @@ struct TransportBar: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .help("Delete every take on all eight tracks")
 
                 Button { audio.bounceMixdown() } label: {
                     HStack(spacing: 6) {
@@ -1762,6 +1798,7 @@ struct TransportBar: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(audio.bounceStatus != nil || audio.busyEdit != nil)
+                .help("Mix every audible track down to one WAV file")
             }
             // Shortcut hints
             HStack(spacing: 14) {
@@ -1810,6 +1847,7 @@ struct TransportBar: View {
                 .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: audio.metronomeEnabled, filled: audio.metronomeEnabled))
                 .accessibilityLabel("Metronome")
                 .accessibilityValue(audio.metronomeEnabled ? "On" : "Off")
+                .help(audio.metronomeEnabled ? "Turn the click off (,)" : "Turn the click on (,)")
 
                 // Metronome volume
                 Slider(value: Binding(
@@ -1820,6 +1858,7 @@ struct TransportBar: View {
                 .tint(Theme.accent.opacity(0.5))
                 .accessibilityLabel("Metronome volume")
                 .accessibilityValue("\(Int(audio.metronomeVolume * 100)) percent")
+                .help("How loud the click is, against the tracks")
 
                 // Count-in toggle: cycles 0 → 1 → 2 → 4 → 0
                 Button {
@@ -1844,12 +1883,17 @@ struct TransportBar: View {
                                     ? (audio.countInBars == 1 ? "1 bar" : "\(audio.countInBars) bars")
                                     : "Off")
                 .accessibilityHint("Cycles off, 1, 2 and 4 bars")
+                .help(audio.countInBars == 0
+                      ? "No count-in: recording starts the moment you press REC"
+                      : "Counts in \(audio.countInBars == 1 ? "1 bar" : "\(audio.countInBars) bars") of click before recording starts")
                 ArcKnob(label: "IN", value: Binding(
                     get: { audio.inputVolume * 100 }, set: { audio.applyInputVolume($0 / 100) }
                 ), range: 0...100, color: Theme.textSecondary, size: 38)
+                .help("Input gain: how hot the interface's signal arrives")
                 ArcKnob(label: "OUT", value: Binding(
                     get: { audio.volume * 100 }, set: { audio.applyVolume($0 / 100) }
                 ), range: 0...100, color: Theme.accent, size: 38)
+                .help("Output level: how loud the mix leaves the app")
                 Button { audio.toggleMasterLimiter() } label: {
                     Text("LIM")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -1874,6 +1918,9 @@ struct TransportBar: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel("Input monitoring")
                 .accessibilityValue(audio.isMonitoring ? "On" : "Off")
+                .help(audio.isMonitoring
+                      ? "Stop passing the interface's input straight to the output"
+                      : "Hear the input, with the chain, without recording")
             }
         }
         .padding(.horizontal, 28).padding(.vertical, 10)
