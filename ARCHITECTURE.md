@@ -148,7 +148,7 @@ the unshifted glyph.
  └─ ContentView                      @StateObject AudioManager
      ├─ TopBar                        brand · view tabs · status · device pickers · FX/Settings
      ├─ HStack  (.padding(.leading, openDrawerWidth), with the drawer as a leading overlay)
-     │   ├─ SettingsPanel (w 260) · SideEffectsPanelView (w 400)   ← at most one, over the gap
+     │   ├─ SideEffectsPanelView (w 400)                          ← the only drawer; over the gap
      │   └─ ArrangeView  ── ArrangeHeadUnit + LoopGridView (+ TrimEditorView)
      │        or MonitorView
      └─ TransportBar                  transport · tempo · count-in · IN/OUT · limiter
@@ -159,15 +159,15 @@ the unshifted glyph.
 `KeyboardShortcutMonitor` installs a local key-down monitor (ignored while a text field is focused)
 and dispatches to `AudioManager` on the main queue.
 
-**Drawers.** The settings and FX panels float as overlays on the workspace rather than sitting in
-the `HStack` — they used to squeeze the timeline into unreadability. So they don't take width, the
-`HStack` takes a `.padding(.leading, audio.openDrawerWidth)` inset instead: opening a drawer pushes
+**Drawers.** The FX panel floats as an overlay on the workspace rather than sitting in
+the `HStack` — it used to squeeze the timeline into unreadability. So it doesn't take width, the
+`HStack` takes a `.padding(.leading, audio.openDrawerWidth)` inset instead: opening the drawer pushes
 the tape (and the monitor view) right by the drawer's own width, and the drawer floats over the
-space it vacated. Each panel publishes its width in `Theme` and uses that same constant for its
-`frame`, so the inset can't drift from the panel. The two are **mutually exclusive** — opening one
-closes the other, since 260 + 400 of a 1280 pt minimum window would leave nothing. The window's
-minimum width is 1280 for the same reason: with a drawer open the lane region still has to hold the
-fixed right-hand control column.
+space it vacated. The panel publishes its width in `Theme` and uses that same constant for its
+`frame`, so the inset can't drift from the panel. **Settings is no longer a drawer**: it is the ⌘,
+`Settings` scene (`SettingsView.swift`), so `SideEffectsPanelView` is the only overlay left and
+there is no second panel to keep out of its way. The window's minimum width is 1280: with the drawer
+open the lane region still has to hold the fixed right-hand control column.
 
 ### 2.2 The facade pattern (the core design)
 
@@ -278,7 +278,11 @@ EffectAudioUnit : AUAudioUnit  ── hosts one kernel as an in-process AU; its
 Synchronisation: an `OSAllocatedUnfairLock`-guarded meter snapshot (`MeterController`), a lock
 around the recording ring and file handle (`RecordingController`), and a `renderLock` inside
 `EffectAudioUnit` so a parameter write from main cannot tear a value the render block is reading
-(`Support.swift`'s `UnfairLock`). Kernel instantiation is serialised process-wide by
+(`Support.swift`'s `UnfairLock`). The two long edit loops report their fraction through
+`AudioManager.reportEditProgress(_:)`, which hops to main and is throttled there to about fifteen a
+second under its own lock — `busyProgress` is `@Published` on the object `LoopGridView` observes, so
+an unthrottled mix loop would re-evaluate the largest view body in the app once per frame of audio.
+Kernel instantiation is serialised process-wide by
 `pumpKernelQueue`, with an epoch discarding completions from a torn-down graph. Remaining
 audio-thread note: the recording ring uses a lock rather than being truly lock-free.
 
@@ -393,35 +397,46 @@ Nothing outside `Sources/` is a build input — all three synchronized groups ar
 
 ## 4. File map
 
-25 files. `[shared]` compiles on both platforms; `[mac]`/`[iOS]` are guarded.
+29 files. `[shared]` compiles on both platforms; `[mac]`/`[iOS]` are guarded.
 
 | File | Lines | Platform | Responsibility |
 |------|------:|----------|----------------|
-| `Views.swift` | 2529 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
-| `TransportController.swift` | 1203 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
+| `Views.swift` | 2840 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
+| `TransportController.swift` | 1269 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
 | `EffectsKernels.swift` | 763 | shared | Custom DSP kernels |
+| `App.swift` | 668 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, menus, `AppDelegate` |
+| `Views_iOS.swift` | 532 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
+| `AudioManager.swift` | 516 | shared | The `ObservableObject` facade: published state + forwarders |
 | `EffectsCore.swift` | 501 | shared | Module/registry/chain/AU-host core + Apple module defs |
-| `Views_iOS.swift` | 463 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
-| `AudioManager.swift` | 387 | shared | The `ObservableObject` facade: published state + forwarders |
-| `EngineController.swift` | 339 | shared | `AVAudioEngine` graph spine + async kernel insert |
+| `ProjectController.swift` | 375 | shared (`[mac]` panels) | `.xyproj` save/load |
+| `EngineController.swift` | 350 | shared | `AVAudioEngine` graph spine + async kernel insert |
 | `RecordingController.swift` | 344 | shared | Count-in (click-grid aligned) + dry capture |
 | `MetronomeController.swift` | 324 | shared | Click scheduling, beat observation + tap tempo |
-| `ProjectController.swift` | 318 | shared (`[mac]` panels) | `.xyproj` save/load |
-| `App.swift` | 273 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, `AppDelegate` |
 | `CoreAudioDevices.swift` | 217 | `[mac]` | CoreAudio HAL enumeration/selection helpers + the aggregate device for clock-master I/O |
+| `SettingsView.swift` | 214 | `[mac]` | The ⌘, Settings window: preferences and device selection |
 | `EffectsChainController.swift` | 202 | shared | Chain mutations + presets |
+| `DeviceController.swift` | 175 | shared | Device discovery + MIDI track follow (delegates to `io`) |
 | `MeterController.swift` | 168 | shared | Meter taps + display smoothing |
-| `DeviceController.swift` | 137 | shared | Device discovery + MIDI track follow (delegates to `io`) |
+| `Models.swift` | 113 | shared | Value types + `Codable` DTOs + `DeviceID` |
+| `Preferences.swift` | 105 | shared | The settings that outlive a launch: `UserDefaults`-backed, write-through |
+| `AboutPanel.swift` | 105 | `[mac]` | The app menu's About item and the credits it has to carry (MIT) |
 | `DeviceIO_iOS.swift` | 104 | `[iOS]` | `AVAudioSession` provider + route/interruption observers |
-| `Models.swift` | 103 | shared | Value types + `Codable` DTOs + `DeviceID` |
 | `Support.swift` | 97 | shared | `UnfairLock`, `computePeaks`, unique filename stems, off-main helper |
 | `DeviceIO_macOS.swift` | 87 | `[mac]` | `CoreAudioDeviceProvider` |
 | `SaveLocation.swift` | 76 | `[mac]` | Sandboxed save-folder: security-scoped bookmark round-trip, first-run prompt state |
-| `Theme.swift` | 63 | shared | Palette + layout constants (drawer widths, control-column width) |
+| `Theme.swift` | 65 | shared | Palette + layout constants (drawer widths, control-column width) |
+| `ProjectRecents.swift` | 52 | `[mac]` | File ▸ Open Recent, on `NSDocumentController`; the only place it is written |
 | `AudioDeviceProviding.swift` | 47 | shared | The device-I/O protocol + `DeviceChange` |
 | `PlatformPaths.swift` | 46 | shared | `tracksRoot` / `presetsDir` / `initialSaveLocation` per platform |
 | `LiveState.swift` | 45 | shared | 60 Hz display state: the `MeterState` / `TrackMeterState` / `PlayheadState` publishers kept out of `@Published` |
 | `App_iOS.swift` | 16 | `[iOS]` | iPad `@main` entry |
+
+**This table had drifted.** It still read "25 files" and carried the line counts from before §9
+began, with `Views.swift` at 2529, `App.swift` at 273, and none of `SettingsView.swift`,
+`Preferences.swift`, `AboutPanel.swift` or `ProjectRecents.swift` present at all — the four files
+§9 stages 2, 3 and 5 added. Every count above was recomputed from the tree during Stage 8 rather
+than carried forward, since a file map whose whole purpose is being current is worse than no map
+when it is wrong.
 
 ---
 
