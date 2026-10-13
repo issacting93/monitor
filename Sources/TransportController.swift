@@ -500,6 +500,49 @@ final class TransportController {
         manager.status = "All tracks cleared"
     }
 
+    /// Clears one track's takes, leaving the track itself in place.
+    ///
+    /// There is no way to remove a track. `tracks` is a fixed `Theme.trackCount` array,
+    /// and the grid, the eight per-track mixers and the OP-XY's MIDI channel-to-track
+    /// map are all indexed by position, so a lane cannot come out without renumbering
+    /// all three. Emptying the track is the operation that exists, and it is what the
+    /// Delete key performs.
+    ///
+    /// The takes stay recoverable: `pushUndo` runs before the clips go, so the snapshot
+    /// holds them and `collectOrphanedFiles` keeps their audio on disk until that
+    /// snapshot ages out of the stack. Undo restores the clips but not the selection.
+    func clearTrack(_ i: Int) {
+        guard i >= 0, i < manager.tracks.count else { return }
+        guard !manager.tracks[i].clips.isEmpty else { return }
+        // A take being recorded onto this track is filed *after* this returns, so it
+        // would put a clip back on a track the user just emptied. Refusing is the only
+        // honest answer — stopping the take instead would race its own filing.
+        if manager.isRecording || manager.countingIn {
+            manager.status = "Stop recording before clearing a track"
+            return
+        }
+        // Same rule as every other edit: nothing may start against state an in-flight
+        // edit is about to replace.
+        guard manager.busyEdit == nil else { return }
+        pushUndo()
+        if manager.tracks[i].isPlaying { stopTrackLoop(i) }
+        // The trim editor is drawing a waveform of a take that is about to stop
+        // existing. `applyTrim` does cope with that, but only by refusing and closing,
+        // so close it here where it is still clear why.
+        if manager.trimmingTrack == i { cancelTrim() }
+        // Only this track's pending buffer load is invalidated. The global
+        // `invalidatePendingWork` would also bump every other track's generation and
+        // silently drop a start that was already in flight there.
+        loadGenerations[i] += 1
+        manager.tracks[i].clips.removeAll()
+        trackBuffers[i] = nil
+        // The selection is resolved only for the selected track, so one naming a take
+        // here has to go with it — while one naming another track's take still resolves
+        // and must be left alone.
+        if i == manager.selectedTrack { manager.selectedClipID = nil }
+        manager.status = "TRK \(String(format: "%02d", i + 1)) cleared"
+    }
+
     // MARK: - Orphaned File Cleanup
 
     /// Records a file the app just created (a take, trim, split part, or duplicate) so

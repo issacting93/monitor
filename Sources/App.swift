@@ -58,6 +58,26 @@ final class KeyboardShortcutMonitor {
                 DispatchQueue.main.async { audio.toggleSolo(audio.selectedTrack) }
                 return nil
 
+            // Delete — Clear the selected track's takes
+            //
+            // Three code points, because the two delete keys do not arrive the way they
+            // look like they should. Asked of the current layout, keyCode 51 (the key
+            // labelled "delete") translates to U+0008 and keyCode 117 (fn+Delete) to
+            // U+007F — the reverse of the usual ASCII names for BS and DEL, and neither
+            // is U+F728. That last one is `NSDeleteFunctionKey`, which AppKit
+            // substitutes for special keys in `characters` and may well be what the
+            // NSEvent layer hands over for forward delete rather than the layout's own
+            // output; it costs nothing to accept both spellings. Any of the three, with
+            // no modifier, is a delete key and nothing else.
+            //
+            // Deliberately no menu key equivalent behind this, for the reason given on
+            // `Tape08Commands`: a bare key handed to the menu bar is matched ahead of the
+            // responder chain, so it would clear a track out from under a focused preset
+            // name field. The guard above is the protection a menu item cannot express.
+            case "\u{8}" where noMod, "\u{7F}" where noMod, "\u{F728}" where noMod:
+                DispatchQueue.main.async { audio.clearTrack(audio.selectedTrack) }
+                return nil
+
             // 1–8 — Select/arm track
             case "1" where noMod: DispatchQueue.main.async { audio.selectedTrack = 0 }; return nil
             case "2" where noMod: DispatchQueue.main.async { audio.selectedTrack = 1 }; return nil
@@ -263,6 +283,8 @@ struct Tape08Commands: Commands {
 
             Divider()
 
+            Button("Clear Track") { audio.clearTrack(audio.selectedTrack) }
+                .disabled(selectedClips.isEmpty || busy)
             Button("Clear All Tracks") { audio.clearAll() }
                 .disabled(!anyClips)
         }

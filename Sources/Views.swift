@@ -769,7 +769,8 @@ struct TrackControlsView: View {
         // The same Track commands the menu bar carries, minus the ones that only make
         // sense for the selected track as a whole. "Clear All Tracks" is deliberately
         // absent: this menu is about one track, and offering a command that wipes all
-        // eight from here would be a trap.
+        // eight from here would be a trap. Clearing *this* track is not, and names the
+        // track it will clear rather than acting on the selection.
         .contextMenu {
             // Reading the global flag rather than the track's own state, because
             // `toggleTrackRecord` stops whatever take is running wherever it is — so if
@@ -805,6 +806,14 @@ struct TrackControlsView: View {
                     .disabled(n > track.clips.count)
                 }
             }
+
+            Divider()
+
+            // Destructive, so it sits on its own at the bottom rather than next to the
+            // toggles. `clearTrack` reads the index it is given, so the track is named
+            // outright and does not depend on this being the selected one.
+            Button("Clear Track") { audio.clearTrack(index) }
+                .disabled(track.clips.isEmpty || audio.busyEdit != nil)
         }
     }
 }

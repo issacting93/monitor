@@ -335,6 +335,8 @@ class AudioManager: ObservableObject {
 
     func clearAll() { transport.clearAll() }
 
+    func clearTrack(_ i: Int) { transport.clearTrack(i) }
+
     func openTrimEditor(_ trackIndex: Int) { transport.openTrimEditor(trackIndex) }
 
     func cancelTrim() { transport.cancelTrim() }
