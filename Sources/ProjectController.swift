@@ -21,36 +21,40 @@ final class ProjectController {
 
     // MARK: - Save
 
-    func save() {
+    func save(completion: ((Bool) -> Void)? = nil) {
         if let url = manager.projectURL {
-            performSave(to: url)
+            performSave(to: url, completion: completion)
         } else {
-            saveAs()
+            saveAs(completion: completion)
         }
     }
 
-    func saveAs() {
+    func saveAs(completion: ((Bool) -> Void)? = nil) {
         #if os(macOS)
         let panel = NSSavePanel()
         panel.title = "Save Project"
         panel.nameFieldStringValue = manager.projectName
         panel.canCreateDirectories = true
         panel.begin { [weak self] response in
-            guard response == .OK, let destURL = panel.url else { return }
+            guard response == .OK, let destURL = panel.url else {
+                completion?(false)          // cancelled — save did not happen
+                return
+            }
             DispatchQueue.main.async {
                 var url = destURL
                 if url.pathExtension != "xyproj" {
                     url = url.appendingPathExtension("xyproj")
                 }
-                self?.performSave(to: url)
+                self?.performSave(to: url, completion: completion)
             }
         }
         #else
         manager.status = "Project save is not available on iPad yet"
+        completion?(false)
         #endif
     }
 
-    private func performSave(to packageURL: URL) {
+    private func performSave(to packageURL: URL, completion: ((Bool) -> Void)? = nil) {
         let m = manager
 
         // Serialize on the main thread — it reads the live session — then hand the
@@ -94,11 +98,16 @@ final class ProjectController {
             }
         } apply: { [weak self] error in
             guard let self else { return }
-            if let error { self.manager.status = "Save error: \(error)"; return }
+            if let error {
+                self.manager.status = "Save error: \(error)"
+                completion?(false)
+                return
+            }
             self.manager.projectURL = packageURL
             self.manager.projectName = packageURL.deletingPathExtension().lastPathComponent
             self.manager.projectDirty = false
             self.manager.status = "Saved \(self.manager.projectName)"
+            completion?(true)
         }
     }
 

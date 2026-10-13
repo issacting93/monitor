@@ -169,7 +169,11 @@ final class KeyboardShortcutMonitor {
 // ── Root View ───────────────────────────────────────────────────────────────
 
 struct ContentView: View {
-    @StateObject private var audio = AudioManager()
+    // Owned by the App scene rather than by this view. The window can be created more
+    // than once, and one AudioManager per window would mean two engines on one audio
+    // device; it also lets the app delegate reach the session state it needs to decide
+    // whether quitting would lose work.
+    @ObservedObject var audio: AudioManager
     private let keyMonitor = KeyboardShortcutMonitor()
     @State private var showSaveLocationSheet = false
 
@@ -251,10 +255,11 @@ struct ContentView: View {
 @main
 struct MonitorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var audio = AudioManager()
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            ContentView(audio: audio)
                 // 1280 rather than 1060: with the widest drawer open the workspace is
                 // pushed right by 400 pt, and the track-header column (200) plus the
                 // control column (`Theme.controlsColumnWidth`, 460) and their gutters
@@ -262,12 +267,57 @@ struct MonitorApp: App {
                 // lanes fell to their floor.
                 .frame(minWidth: 1280, minHeight: 720)
                 .background(Theme.bg)
+                .onAppear { appDelegate.audio = audio }
         }
         .windowStyle(.hiddenTitleBar)
     }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Set by the scene on appear; nil only before the first window has been shown.
+    weak var audio: AudioManager?
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+
+    /// Quitting must not discard a session. `projectDirty` was maintained but never read
+    /// on the way out, and the title bar is hidden, so ⌘W or ⌘Q threw away a recording
+    /// with no prompt and no visible sign that there was anything to lose.
+    ///
+    /// Returns `.terminateLater` whenever a prompt may be needed, and answers with
+    /// `reply(toApplicationShouldTerminate:)` once the user has decided — the reply has to
+    /// wait for the save to actually finish, which is why a cancelled save panel and a
+    /// write error both come back as "do not quit" rather than as a silent success.
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let audio, audio.projectDirty else { return .terminateNow }
+
+        let alert = NSAlert()
+        alert.messageText = "Save changes to “\(audio.projectName)” before quitting?"
+        alert.informativeText = "Your changes will be lost if you don’t save them."
+        alert.addButton(withTitle: "Save")        // first added = default (return)
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: "Don’t Save")  // destructive, last
+        alert.alertStyle = .warning
+
+        let finish: (Bool) -> Void = { sender.reply(toApplicationShouldTerminate: $0) }
+        let decide: (NSApplication.ModalResponse) -> Void = { response in
+            switch response {
+            case .alertFirstButtonReturn:  audio.saveProject { finish($0) }
+            case .alertThirdButtonReturn:  finish(true)    // Don't Save
+            default:                       finish(false)   // Cancel
+            }
+        }
+
+        if let window = sender.mainWindow ?? sender.windows.first {
+            alert.beginSheetModal(for: window, completionHandler: decide)
+        } else {
+            // No window to hang a sheet on — ⌘Q from the Dock menu after the window has
+            // already closed. Modal is the only option left, and there is nothing to
+            // block. The decision is deferred a turn on purpose: `reply` must *follow*
+            // the `.terminateLater` returned below, never precede it.
+            let response = alert.runModal()
+            DispatchQueue.main.async { decide(response) }
+        }
+        return .terminateLater
+    }
 }
 #endif

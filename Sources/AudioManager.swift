@@ -355,7 +355,10 @@ class AudioManager: ObservableObject {
 
     // MARK: - Project Save/Load (forwarders — behaviour lives in ProjectController)
 
-    func saveProject() { project.save() }
+    /// `completion` reports whether the project was actually written: `false` covers a
+    /// cancelled save panel and a write error alike, so a caller that must not proceed
+    /// until the work is safely on disk (the quit guard) can treat both as "don't".
+    func saveProject(completion: ((Bool) -> Void)? = nil) { project.save(completion: completion) }
 
     func saveProjectAs() { project.saveAs() }
 
