@@ -861,4 +861,443 @@ Audio-thread safety pass. One staged set of changes, no behaviour change for the
 `xcodebuild -scheme Tape08` (BUILD SUCCEEDED) all pass. **Not yet verified on hardware** — the
 audible result (no drop-outs while recording; correct DSP when adding/reordering effects mid-session)
 still needs the OP-XY run in §8.6. `C4` (main-thread edit/export I/O) remains open by design; it is
-not on the recording/effects critical path.             
+not on the recording/effects critical path.
+
+---
+
+# 9. macOS platform conformance — 2026-10-12
+
+## 9.0 Why this section exists
+
+TAPE 08 looks like a Mac app and behaves like one in the audio path, but it is missing the parts a
+Mac user meets *first* — and one of them is a data-loss bug rather than a polish gap.
+
+The headline: **the app has no menu bar of its own.** On macOS the menu bar is the command-discovery
+surface — where a user finds out what an app can do, where shortcuts are advertised, and where the
+system looks for About, Settings, Undo and Quit. TAPE 08 implements ~28 keyboard shortcuts through a
+global `NSEvent` monitor (`App.swift:12-167`) and **not one of them appears in a menu**, so the only
+way to learn them is to read the source. That is the single largest gap in this section, and it is
+also the cheapest to fix, because the actions all already exist on `AudioManager` as forwarders.
+
+Whole-tree audit, 2026-10-12:
+
+```
+grep -rn "\.commands|CommandMenu|CommandGroup|Settings \{|orderFrontStandardAboutPanel|
+          noteNewRecentDocumentURL|isDocumentEdited|representedURL|onOpenURL|handlesExternalEvents" Sources/
+→ no matches
+```
+
+No menus. No Settings scene. No About. No document-open handling. No dirty indicator. No recents.
+
+**Research base:** Apple's *Building and customizing the menu bar with SwiftUI*; the community
+codification in `sindresorhus/human-interface-guidelines-extras`; and the macOS design /
+accessibility skill references (menu structure, Settings window rules, Reduce Motion, colour-only
+signalling). Sources are linked at the end of this section.
+
+### 9.0.1 Already conformant — do not re-do
+
+- App Sandbox + hardened runtime (`Tape08/Tape08.entitlements`, `ENABLE_HARDENED_RUNTIME = YES`).
+- `NSMicrophoneUsageDescription` in both plists.
+- `LSApplicationCategoryType = public.app-category.music`, `NSHumanReadableCopyright`,
+  `CFBundleDocumentTypes` for `.xyproj`, and `ITSAppUsesNonExemptEncryption = false` — **all in the
+  Xcode plist only**; see Stage 5 for why the `package.sh` plist matters too.
+- `applicationShouldTerminateAfterLastWindowClosed` (`App.swift:271`).
+- Minimum window size enforced at 1280×720 (`App.swift:263`).
+- The `#if os(...)` platform seam is clean, so nothing here should need to touch the iPad build
+  except where noted.
+
+## 9.1 The stages
+
+Nine stages, ordered by (impact on a Mac user) ÷ (risk to the audio path). Every stage is one
+self-contained, independently revertible commit with the four gates of §9.9 run after it, per the
+established workflow. Nothing in this section touches the engine graph, so none of it needs a
+hardware run to be trusted — but anything that changes a *shortcut* needs the §8.6 keyboard check
+re-run, because Stage 1 moves the bindings out of the monitor and into menus.
+
+### Stage 1 — The menu bar (highest impact)
+
+**Problem.** Every action is invisible and every shortcut unlearnable. `Edit > Undo` does not exist,
+so ⌘Z works but the menu says nothing; `File > Save` does not exist, so ⌘S is folklore.
+
+**Change.** Add a `.commands { }` block to the `WindowGroup` scene in `App.swift` and move the
+monitor's bindings into real menu items with `.keyboardShortcut(...)`. The actions are all already
+public on `AudioManager` — this is wiring, not implementation.
+
+| Menu | Items |
+|---|---|
+| **File** | New Project · Open… (⌘O) · Open Recent ▸ *(Stage 5)* · Save (⌘S) · Save As… (⌘⇧S) · Export Track… (⌘E) · Bounce Mixdown… · Close (⌘W) |
+| **Edit** | Undo (⌘Z) · Redo (⌘⇧Z) — via `CommandGroup(replacing: .undoRedo)`, titled dynamically |
+| **Transport** *(app-specific `CommandMenu`)* | Play/Stop (Space) · Record (R) · Return to Start (Return) · Metronome (,) · Tap Tempo · Quantize cycle · Loop toggle · Count-in ▸ (Off/1/2/4) |
+| **Track** *(app-specific `CommandMenu`)* | Select 1–8 (1…8) · Mute (M) · Solo (S) · Select Take 1–8 (⌘1…⌘8) · Trim / Split (⌘T) / Duplicate (⌘D) |
+| **View** | Arrange (**moved off Tab**, see below) · Monitor · Effects drawer · Settings · Zoom In (⌘+) · Zoom Out (⌘−) · Follow Playhead (F) |
+| **Window / Help** | keep the system defaults; Help gains a documentation item in Stage 3 |
+
+**The part that needs judgement.** A menu item and the `NSEvent` monitor must not both fire on the
+same key — a menu shortcut is consumed by the menu, so a live monitor bound to the same key would
+double-fire for keys the menu does not claim and silently lose the ones it does. The plan is
+therefore to **delete each binding from the monitor as its menu item lands**, and to retire the
+monitor entirely once every binding has moved. The monitor's `firstResponder` guard (don't hijack
+keys while a text field is focused, `App.swift:18-21`) is the one behaviour menus do not need to
+reproduce: a menu shortcut is not delivered while a text field has focus in the first place.
+
+`space`, `Return`, `Tab`, `1`–`8` and `,` are all menu-representable (`KeyEquivalent` accepts them),
+so the monitor should end up empty rather than reduced. **Delete it in this stage or the last one,
+whichever leaves no orphan** — a half-migrated monitor is worse than either extreme.
+
+**Disabled state.** Items carry `.disabled(...)` from the matching `AudioManager` predicate so the
+menu greys out correctly: nothing to undo, no clip to split, no track selected, not monitoring.
+
+**A live bug this stage fixes.** The audit found that ⌘Z and ⌘⇧Z are swallowed by the `NSEvent`
+monitor while SwiftUI's **stock `Edit > Undo` / `Redo` items still exist in the menu bar**, bound to
+the responder chain and fed by an `undoManager` this app never populates. So today the Edit menu
+advertises Undo, greys it out as unavailable, and the shortcut works anyway — the worst of both. The
+`CommandGroup(replacing: .undoRedo)` above is what makes the menu and the shortcut agree.
+
+**The Tab binding is a real conflict, not a detail.** `Tab` currently switches Arrange/Monitor
+(`App.swift:137-139`), but on macOS `Tab` is the keyboard-focus traversal key. Keeping it as a
+command shortcut means the app can never gain keyboard focus navigation (Stage 7), because the menu
+eats Tab before the focus system sees it. Move the view switch to a shortcut that is not reserved —
+the plan is ⌃1 / ⌃2 (⌘1–⌘8 are already take-select) — and leave Tab to focus. **Decide this in
+Stage 1**, because it is the
+stage that makes Tab a menu key equivalent; changing it later means re-teaching a shortcut.
+
+### Stage 2 — A real Settings window (⌘,)
+
+**Problem.** `showSettings` is a floating drawer holding what are, by HIG definition, *preferences*.
+There is no ⌘, and no Settings item in the app menu.
+
+**Change.** A `Settings { }` scene with `Form` + `.formStyle(.grouped)`, grouped into sections:
+**Audio** (default input/output device, sample-rate readout, master limiter), **Recording** (save
+location, default count-in bars, dry-take note), **Playback** (default BPM, metronome volume,
+loop-by-default), **Timeline** (default zoom, follow playhead).
+
+**Open decision — recorded so it is not re-litigated.** The drawer and the scene are *not* the same
+thing and the split is deliberate: the **Settings scene holds persistent preferences** (what the app
+should do next launch), the **FX drawer stays a drawer** (it is a live performance surface, not a
+preference). `showSettings` in `App.swift:223` is retired; the gear in `TopBar` opens the scene. If
+that split turns out wrong, the revert is one commit.
+
+Per the HIG rules quoted in §9.5: not translucent, Escape must not close it (the `Settings` scene
+gives this for free), traffic-light buttons disabled-but-present, and no About/licence tab inside it.
+
+### Stage 3 — About panel, Help menu, and credits
+
+**Problem.** `CommandGroup(replacing: .appInfo)` is absent, so About shows the system default — but
+more importantly there is nowhere that states the version, and **no attribution for the ported DSP**.
+The product plan already asks for a `CREDITS.md`, and the effects are Airwindows ports
+(`ARCHITECTURE.md` §1.8), which is a licensing obligation rather than a nicety.
+
+**Change.** A custom About window (app icon, name, `CFBundleShortVersionString` +
+`CFBundleVersion`, copyright, a credits line) reachable from the app menu, plus `CREDITS.md` and a
+Help menu item pointing at it. This is the one stage with a **legal** motivation, so treat the
+attribution text as required, not decorative.
+
+### Stage 4 — Don't lose the user's work (correctness, not polish)
+
+**Problem.** `projectDirty` exists and is maintained, but **nothing reads it on quit**.
+`applicationShouldTerminateAfterLastWindowClosed` returns `true` (`App.swift:271`), so ⌘W or the red
+button quits immediately and an unsaved project is gone with no prompt. Combined with
+`.windowStyle(.hiddenTitleBar)` (`App.swift:266`) there is also **no edited dot and no filename** in
+the title bar, so the user has no indication there is anything to lose. A looper records takes — this
+is the stage where an unfixed gap costs real work.
+
+**Change.** `applicationShouldTerminate` returns `.terminateLater` when `projectDirty`, shows a
+Save / Discard / Cancel alert, and replies once resolved. In the other direction: a `WindowGroup`
+title that carries the project name and `NSWindow.isDocumentEdited` so the dot appears. Either drop
+`.hiddenTitleBar` or keep it and set `representedURL` — the second keeps the app's look, and is what
+this stage should try first, since the title bar is part of the design the user has already signed
+off on.
+
+**Same stage, because it is the same "the window remembers the session" idea: the frame is not
+saved either.** There is no `setFrameAutosaveName`, no `.defaultPosition`, and no `.defaultSize` —
+nothing in `Sources/` touches `NSWindow` at all. The opening size is faked with
+`.frame(minWidth: 1280, minHeight: 720)` (`App.swift:263`), which both fails to remember a resized
+window *and* forces a 1280×720 window onto a smaller display. Give the scene a stable id and
+`.defaultSize`, and autosave the frame. It is two lines, it is the kind of thing users notice
+immediately, and it belongs with the dirty-state work rather than in a stage of its own.
+
+### Stage 5 — Documents: open, recent, and a UTI
+
+**Problem.** The Xcode plist declares `.xyproj` as a document type with `LSHandlerRank = Owner`
+(`Tape08/Tape08/Info.plist`), but **nothing handles the open event**, so double-clicking a project in
+Finder launches the app and does nothing — which is worse than not claiming the type. There is no
+Open Recent. There is no exported UTI, so the system invents a dynamic one. And the two plists have
+**diverged**: `package.sh`'s has no category, no copyright, no document types, and a different
+bundle id (`com.opxy.tape08` vs the Xcode project's `com.tape08.app`).
+
+**Change.** Handle the open event (`.onOpenURL` on `ContentView`, or
+`application(_:open:)` on the delegate) and route it to the existing `performLoad`. Add
+`CommandGroup(replacing: .recents)` with `NSDocumentController.shared.noteNewRecentDocumentURL` on
+every successful save/load. Declare `UTExportedTypeDeclarations` for the `.xyproj` UTI. Then make
+`package.sh`'s plist agree with the Xcode one, and settle the bundle id — **the id is the one item
+here that cannot be changed after shipping**, so it is a decision to make deliberately, not to
+inherit from whichever file was edited last. While in the plist, set
+`NSApplicationSupportsSecureRestorableState` (the audit found it absent) so macOS 14 stops warning
+about it — and note that the *built* plist has neither `NSHumanReadableCopyright` nor
+`LSApplicationCategoryType`, both of which the Xcode plist does carry, which is exactly the
+divergence this stage exists to close.
+
+### Stage 6 — Context menus, and Escape
+
+**Problem.** `grep -rn "\.contextMenu" Sources/` finds none. Every right-click on the timeline, a
+track header, a clip or the ruler does nothing, so the app's most natural surfaces are inert.
+
+**Change.** `.contextMenu` on: a clip (Trim · Split at Playhead · Duplicate · Export · Select Take ·
+Delete), a track header (Arm · Mute · Solo · Clear Track · Select Take 1–8), the bar ruler (Seek
+Here), the transport (Play/Stop · Record · Return to Start). Per the HIG rule quoted in §9.5, a
+context menu is the *relevant subset* of the menu-bar commands, not a different command set — so
+this stage depends on Stage 1 having defined those commands, which is why it comes after it.
+
+**Escape, while in the interaction stage.** Escape does nothing anywhere today: no `.onExitCommand`,
+no `onKeyPress`, no Escape branch in the monitor. The Trim editor can only be dismissed by clicking
+its CANCEL button (`Views.swift:2223-2233`), and the FX/Settings drawers likewise. Escape should
+cancel trim, close whichever drawer is open, and clear the clip selection — in that order, one press
+each. This is the same class of change as a context menu (an expected input that is silently inert),
+so it rides in this stage rather than waiting for Stage 8.
+
+### Stage 7 — Accessibility
+
+**Problem.** The app is entirely custom-drawn. Every control in §9.6's audit is a `Button` with a
+drawn shape and no `accessibilityLabel`, so VoiceOver announces them as unlabelled buttons; mute,
+solo and record state are signalled by **colour alone**; and animations are not gated on
+Reduce Motion.
+
+**Change, in three passes:**
+1. **Labels** — `accessibilityLabel` + `accessibilityValue` on every icon-only or shape-only
+   control, and `.accessibilityElement(children: .combine)` where a control is icon + text. Faders
+   and knobs get a value and an adjustable action so VoiceOver can change them.
+2. **Never colour alone** — mute/solo/record/armed states gain a shape or text difference, so they
+   survive greyscale and the Increase Contrast setting.
+3. **Reduce Motion** — the drawer slide, playhead motion, and any spring are gated on
+   `@Environment(\.accessibilityReduceMotion)`.
+
+This is the stage where a green typecheck proves the least — it needs VoiceOver and the Accessibility
+Inspector, which are **hardware-free** but cannot be automated here, so it joins §8.6 as a manual
+check.
+
+### Stage 8 — Tooltips, empty states, and progress
+
+**Problem.** Exactly **two** `.help(...)` calls exist in the whole app (`Views.swift:877`, `:1544`),
+so the small custom controls explain themselves only by shape. An empty track and an empty project
+look the same as a broken one. Long operations (bounce, export, project save) show a text status and
+no determinate progress — the app's only `ProgressView` is indeterminate (`Views.swift:1462`) — so a
+30-second mixdown is indistinguishable from a hang.
+
+Also here: **no hover affordances.** `grep -rn "onHover" Sources/` returns nothing, so clips that are
+drop targets (`.onDrop`, `Views.swift:614`) and lanes that respond to the pointer give no feedback
+that they are interactive.
+
+**Change.** `.help()` on the transport, track-header, chain-editor and zoom controls. A
+`ContentUnavailableView` (macOS 14, within target) for an empty project and for an empty track lane.
+A determinate `ProgressView` driven by the existing `busyEdit` plumbing for bounce/export/save.
+
+### Stage 9 — Reveal in Finder, Share, and completion notifications
+
+**Problem.** After an export or bounce, the app says "Exported …" and the file is somewhere the user
+has to go and find. There is no Share, and a long bounce finishing while the user is in another app
+announces itself nowhere.
+
+**Change.** A **Reveal in Finder** affordance on completion
+(`NSWorkspace.shared.activateFileViewerSelecting`), and a Share action (`NSSharingServicePicker`) on
+exported files. A user notification (`UNUserNotificationCenter`) when a bounce or export completes
+**while the app is not frontmost** — and only then, per the "restrained notifications" rule: an
+in-app status line is enough when the user is already looking at it.
+
+**Drag-out, which is the same finding seen from the other side.** `.onDrag` / `.draggable` appear
+nowhere; the only drag-and-drop in the app is *inbound* (`.onDrop`, `Views.swift:614-627`). WAVs are
+produced and cannot be dragged to Finder or into a DAW — the standard way a Mac user moves audio out
+of an app. The exported file and the exported clip both want an `NSItemProvider`.
+
+## 9.2 What is deliberately not in scope
+
+- **A document-based architecture** (`DocumentGroup`, `NSDocument`). The app holds one session, and
+  rewiring to `DocumentGroup` would rewrite save/load, undo and the dirty flag — a large change for
+  no user-visible gain over Stage 4 + Stage 5. Revisit only if multi-window editing is wanted.
+- **Autosave / crash recovery.** The product plan wants it (`OP-XY Monitor multitrack product
+  plan.md:47`) but it is a scheduling and file-management feature, not a platform-conformance one,
+  and it interacts with the orphan-sweep (`H3`). Its own section when it is picked up.
+- **A customisable toolbar.** The app uses `.hiddenTitleBar` and no `.toolbar`; adding one is a
+  design change, not a conformance fix.
+- **`CREDITS.md` beyond the DSP attribution** — that is a legal item and ships in Stage 3; a fuller
+  open-source inventory can follow.
+- **Quick Look (`QLPreviewPanel`).** The audit notes it is absent, and normally a Mac app should
+  preview what it can. Here it is genuinely blocked: Quick Look's gesture is the space bar, and space
+  is already play/stop — the app's single most important key. Not worth re-binding play/stop for.
+- **The Services menu.** No `registerServices` and no provider. Nothing in a looper obviously wants
+  a system service, so this is noted and skipped rather than planned.
+- **Pinch-to-zoom on the timeline.** No `MagnifyGesture`; zoom is keyboard and buttons only. Two-finger
+  *scroll* works incidentally through the lane `ScrollView` (`Views.swift:929`). A nice-to-have, not a
+  conformance gap, so it is listed here rather than staged.
+- **Localisation.** Every string is a literal. Out of scope, but worth noting that Stage 1 puts a
+  large number of new user-visible strings into the codebase, which is the point at which a
+  `Localizable.strings` extraction would be cheapest if it is ever wanted.
+
+## 9.3 Priority
+
+| Priority | Stage | Why this order |
+|---|---|---|
+| **P0** | 4 — dirty guard | Only stage that prevents **data loss**. Can land any time; do it regardless of the rest. |
+| **P1** | 1 — menu bar | Largest discoverability gap; every action already exists, so it is wiring |
+| **P1** | 5 — documents + plist reconciliation | Double-click is broken *today* and the plists have diverged |
+| **P2** | 2 — Settings scene | Needed before shipping to MAS; ⌘, is expected |
+| **P2** | 3 — About + credits | Contains a licensing obligation |
+| **P2** | 6 — context menus | Depends on 1 |
+| **P3** | 7 — accessibility | Highest effort, cannot be auto-verified |
+| **P3** | 8 — tooltips / empty states / progress | |
+| **P3** | 9 — Reveal / Share / notifications | |
+
+**Suggested execution order** differs from priority because of dependencies: **4 → 1 → 6 → 2 → 3 → 5 →
+7 → 8 → 9**. Stage 4 is first because it is small, independent, and the only correctness item;
+Stage 5 is late despite being P1 because the bundle-id decision in it may want a deliberate answer
+rather than a rushed one.
+
+## 9.4 Verification
+
+Four gates after each stage, unchanged from §8.6/§8.9:
+
+```bash
+TC=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc
+MACSDK=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
+IOSSIMSDK=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk
+$TC -typecheck -parse-as-library -target arm64-apple-macosx14.0   -sdk "$MACSDK"    -module-name Tape08 Sources/*.swift
+$TC -typecheck -parse-as-library -target arm64-apple-ios17.0-simulator -sdk "$IOSSIMSDK" -module-name Tape08 Sources/*.swift
+./package.sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project Tape08/Tape08.xcodeproj -scheme Tape08 build
+```
+
+**Stages 1–3 and 6 are largely self-verifying**: a menu item that exists in the built app is a menu
+item that exists, and `sdef`/`strings` on the bundle shows the command set without launching it. The
+honest limit is that **whether a menu item is enabled at the right moment, and whether its shortcut
+collides with a live monitor binding, is a runtime property** — §8.6's keyboard check must be re-run
+after Stage 1, and it must now exercise the *menus*, not just the keys.
+
+**Stage 7 (accessibility) cannot be verified by any gate in this document.** It needs VoiceOver and
+the Accessibility Inspector, by hand. Listing it as "compile-verified" would be a false claim.
+
+## 9.5 Platform rules applied
+
+The specific rules from the sources below that the stages above lean on — recorded here so a future
+reader can tell a *convention* from an *opinion*:
+
+- **Menu bar.** Every command the app offers belongs in the menu bar, with its shortcut shown. The
+  menu bar is the canonical command list; a shortcut that exists only as a key press is not
+  discoverable. Menu items are validated (`disabled`) rather than hidden.
+- **Context menus.** A right-click menu is the *relevant subset* of the menu-bar commands for the
+  thing clicked — never a different, larger command set.
+- **Settings window.** Opened by ⌘, from the app menu, titled "Settings…". Not translucent. Escape
+  does not close it. The traffic-light buttons are present but disabled. **No About or licence tab
+  inside it** — About belongs in the app menu.
+- **About.** Reachable from the app menu; carries version and copyright.
+- **Quit.** Never discard unsaved work silently. The window shows an edited state, and quitting
+  prompts.
+- **Documents.** If an app claims a document type, opening one must actually open it; a claimed type
+  with no open handler is worse than no claim.
+- **Accessibility.** Controls are labelled; state is never signalled by colour alone (it must survive
+  greyscale and Increase Contrast); Reduce Motion is honoured.
+- **Notifications.** Restrained — a notification is for when the user is *not* looking at the app,
+  never for something the in-app UI already said.
+- **Pointer targets.** 44×44 pt where the layout allows; icon-only controls carry a help tag.
+
+**Sources.**
+
+- Apple, *Building and customizing the menu bar with SwiftUI* —
+  <https://developer.apple.com/documentation/swiftui/building-and-customizing-the-menu-bar-with-swiftui>
+- `sindresorhus/human-interface-guidelines-extras` —
+  <https://github.com/sindresorhus/human-interface-guidelines-extras>
+- macOS design / accessibility skill references (menu structure, Settings-window rules, Reduce
+  Motion, colour-only signalling) — <https://github.com/robzilla1738/roberts-skills>
+
+## 9.6 Audit detail
+
+Whole-tree audit of `Sources/`, 2026-10-12. Each row is `file.swift:line`, or **ABSENT** with the
+grep that establishes it. Line numbers are from that audit and are expected to drift.
+
+### App structure
+
+| # | Item | State | Where |
+|---|---|---|---|
+| 1 | `Settings` scene (⌘,) | **ABSENT** — in-window drawer instead | `App.swift:223` (`if audio.showSettings`), toggle at `AudioManager.swift:48-51`, gear at `Views.swift:403-409` |
+| 2 | About panel | **ABSENT** — SwiftUI's implicit default only | no `orderFrontStandardAboutPanel` in `Sources/` |
+| 3 | `.commands` / `CommandGroup` / `CommandMenu` | **ABSENT** — stock menu bar only | `grep` → 0 hits; scene is just `WindowGroup` at `App.swift:255-267` |
+| 4 | File ▸ New/Open/Save/Save As items | **ABSENT** as menu items; shortcuts exist in the monitor | `App.swift:95-107` |
+| 5 | `WindowGroup` sizing | **PARTIAL** — no `.windowResizability`, no `.defaultSize` | min size faked at `App.swift:263` |
+| 6 | Window frame autosave / restoration | **ABSENT** — no `NSWindow` reference at all | `grep -rn "NSWindow\|setFrameAutosaveName" Sources/` → 0 |
+| 7 | `NSApplicationDelegate` methods | **ONE** — the terminate-after-close flag only | `App.swift:270-272` |
+| 8 | Full-screen / `.toolbar` on macOS | **ABSENT** | `.toolbar` only at `Views_iOS.swift:376` |
+
+### Document & file handling
+
+| # | Item | State | Where |
+|---|---|---|---|
+| 9 | Open Recent | **ABSENT** | no `noteNewRecentDocumentURL`; `ProjectController.performSave` `:53-103`, `performLoad` `:165-230` |
+| 10 | Unsaved-changes guard on quit | **ABSENT** — `projectDirty` drives only a title asterisk | `AudioManager.swift:139`, `Views.swift:317` |
+| 11 | Autosave / crash recovery | **ABSENT** | undo stack is in-memory only, `TransportController.swift:453-477` |
+| 12 | Window title / represented filename / edited dot | **ABSENT** | no `representedURL`, no `.navigationTitle` on macOS; title bar hidden at `App.swift:266` |
+| 13 | Drag & drop **out** | **ABSENT** — inbound only | `.onDrop` at `Views.swift:614-627`; no `.onDrag`/`.draggable` |
+| 14 | Reveal in Finder | **ABSENT** — status string only | `TransportController.swift:912-941` (export), `:1027-1142` (mixdown) |
+| 15 | Share sheet | **ABSENT** | no `NSSharingServicePicker`/`ShareLink` |
+| 16 | Quick Look | **ABSENT** — and blocked by space=play | no `QLPreviewPanel` |
+| 17 | Services menu | **ABSENT** | no `registerServices` |
+
+### Interaction & input
+
+| # | Item | State | Where |
+|---|---|---|---|
+| 18 | Context menus | **ABSENT** | `grep -rn "contextMenu" Sources/` → **0** |
+| 19 | Tooltips (`.help`) | **PARTIAL — 2 total** | `Views.swift:877`, `:1544` only |
+| 20 | Keyboard shortcuts | **PRESENT, 20 bindings, all invisible** | `App.swift:12-167`; table below |
+| 21 | Pinch-to-zoom | **ABSENT** — keyboard/buttons only | no `MagnifyGesture`; scroll works via `Views.swift:929` |
+| 22 | Hover effects | **ABSENT** | `grep -rn "onHover" Sources/` → **0** |
+| 23 | Multi-select / copy-paste of clips | **ABSENT** | single `selectedClipID`; no ⌘C/⌘V in the monitor |
+| 24 | Focus / keyboard navigation | **ABSENT** — and Tab is repurposed | no `.focusable`/`@FocusState`; Tab at `App.swift:137-139` |
+| 25 | Escape handling | **ABSENT** | no `.onExitCommand`; trim editor closes only by button, `Views.swift:2223-2233` |
+
+**Item 20 in full** — the monitor's bindings, all of which Stage 1 must move into menus:
+
+| Key | Mods | Action | Line |
+|---|---|---|---|
+| Space | — | Play/stop all | 42-46 |
+| R / M / S | — | Record / Mute / Solo on selected track | 49-61 |
+| 1–8 | — | Select track | 64-71 |
+| 1–8 | ⌘ | Select take | 75-82 |
+| Z | ⌘ / ⌘⇧ | Undo / Redo | 85-92 |
+| S / S | ⌘ / ⌘⇧ | Save / Save As | 95-102 |
+| O | ⌘ | Open | 105-107 |
+| E | ⌘ | Export selected track | 110-112 |
+| T | ⌘ | Split at playhead | 115-117 |
+| D | ⌘ | Duplicate last clip | 120-122 |
+| Return / keypad Enter | — | Stop and return to start | 127-129 |
+| , | — | Metronome | 132-134 |
+| Tab | — | Arrange/Monitor | 137-139 |
+| = / + , − / _ | ⌘ | Zoom in / out | 142-149 |
+| F | — | Follow playhead | 152-154 |
+
+The monitor bails out when a text field has focus (`App.swift:18-21`). The bare-letter bindings
+(R/M/S/F, 1–8, Tab, comma) fire with no modifier anywhere in the window, which is what collides with
+standard macOS behaviour — see the ⌘Z finding in Stage 1 and the Tab finding below it.
+
+### Accessibility
+
+| # | Item | State | Where |
+|---|---|---|---|
+| 26 | `accessibilityLabel` / `Value` / `Hint` | **ABSENT — 0 in the entire codebase** | `grep -rn "accessibility" Sources/*.swift \| wc -l` → **0** |
+| 27 | `accessibilityElement(children:)` | **ABSENT** | as above |
+| 28 | Reduce Motion / Transparency / Contrast | **ABSENT** — animates unconditionally | `.animation(...)` + `.scaleEffect` at `Views.swift:48-49` |
+| 29 | Colour-only signalling | **PARTIAL — mute/solo and track identity are colour-only** | `Views.swift:650-664`, `Theme.trackColor` at `:638`. Status text is fine (colour + text, `:294-340`); REC pairs colour with a label (`:1430-1442`) |
+
+### Visual / system integration
+
+| # | Item | State | Where |
+|---|---|---|---|
+| 30 | Dark mode adaptation | **ABSENT** — hardcoded dark palette, no `colorScheme` | `Theme.swift:10-31` |
+| 31 | System accent colour | **ABSENT** — hardcoded gold, ignores the user's accent | `Theme.swift:17`; no `Color.accentColor` reference |
+| 32 | SF Symbols vs custom drawing | **MIXED** — both, heavily | SF Symbols at `Views.swift:305, 404, 845, 859, 1500, 1550, 2329, 2364`; custom `Path`/`Canvas` for `ArcKnob` `:65`, `TrackFader` `:188`, `VerticalMeter` `:441`, `WaveformLaneView` `:475`, `ReelView` `:1582`, `DotGridBackground` `:14` |
+| 33 | `Form` / `GroupBox` / `LabeledContent` | **ABSENT** — settings drawer is hand-laid-out `VStack`s | `Views.swift:2256-2344` |
+| 34 | Progress indication | **PARTIAL — indeterminate only** | `ProgressView()` at `Views.swift:1462`; `busyEdit` disables buttons but is never rendered as progress |
+| 35 | Completion notifications | **ABSENT** | no `UNUserNotificationCenter`; status strings at `TransportController.swift:934-935, 1134-1135` |
+
+**Honest note on items 30–32.** The hardcoded palette and the fully custom controls are a *design*
+choice for a retro instrument, not an oversight, and this plan does not propose replacing them. What
+is proposed is narrower: that the app respond to **Increase Contrast** and **Reduce Motion**, and
+that mute/solo stop meaning "colour only" — both of which are correctness under a user's accessibility
+settings rather than a change of look.             
