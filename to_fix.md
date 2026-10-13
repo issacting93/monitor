@@ -906,7 +906,7 @@ No menus. No Settings scene. No About. No document-open handling. No dirty indic
 
 ### 9.0.1 Status — updated 2026-10-13
 
-Seven of the nine stages have landed, in the recommended order's first seven positions. The audit
+Eight of the nine stages have landed, in the recommended order's first eight positions. The audit
 block above and §9.6 are the **original 2026-10-12 snapshot** and are left in place as the record of
 what the gap was; §9.6 carries a status column showing what has since changed, and the line numbers
 there have been re-resolved.
@@ -920,7 +920,7 @@ there have been re-resolved.
 | 3 — About, Help, `CREDITS.md` | ✅ landed | `fb98d7b` |
 | 5 — documents, recents, UTI, plist | ✅ landed | `b7537cb` (open event, Open Recent) · `48eb2b7` (bundle id, plists) |
 | 7 — accessibility | ✅ landed | `7488c3b` (Reduce Motion) · `1717507` (never colour alone) · `fa3e053` (labels, values, adjustable actions) |
-| 8 — tooltips, empty states, progress | not started | |
+| 8 — tooltips, empty states, progress | ✅ landed | `481e2ac` (tooltips) · `521f667` (empty states, drop target) · `ad8979b` (progress) |
 | 9 — Reveal, Share, notifications | not started | |
 
 Three things landed that this section did not plan, two of them found against the built app rather
@@ -1393,7 +1393,7 @@ is reachable at all on these custom views, and whether `.accessibilityElement()`
 trim handles exposes them — an element that is silently dropped from the tree looks identical to a
 working one from the compiler's side.
 
-### Stage 8 — Tooltips, empty states, and progress
+### Stage 8 — Tooltips, empty states, and progress — ✅ LANDED
 
 **Problem.** Exactly **two** `.help(...)` calls exist in the whole app (`Views.swift:1126`, `:1861`),
 so the small custom controls explain themselves only by shape. An empty track and an empty project
@@ -1408,6 +1408,93 @@ that they are interactive.
 **Change.** `.help()` on the transport, track-header, chain-editor and zoom controls. A
 `ContentUnavailableView` (macOS 14, within target) for an empty project and for an empty track lane.
 A determinate `ProgressView` driven by the existing `busyEdit` plumbing for bounce/export/save.
+
+#### What landed
+
+`481e2ac` (tooltips), `521f667` (empty project, empty lane, drop target), `ad8979b` (progress).
+
+**Tooltips — 2 became 35.** `grep -c '\.help(' Sources/Views.swift` → **35**, the first at
+`Views.swift:273`. Each of the four surfaces the section named is covered: `TempoControl` (three, at
+`:273`, `:303`, `:319`), `TrackControlsView` (five, `:836`–`:915`), the zoom and follow trio inside
+`LoopGridView` (`:1168`–`:1196`) with its header select (`:1258`), `SideEffectsPanelView` (eight,
+`:1466`–`:1710`), and `TransportBar` (fourteen, `:1784`–`:1986`) — 34 between them, plus the lane's
+own at `:794`. Copy is written as what the control *does*,
+not what it is, and where a control's job changes with state the tooltip changes with it: the play
+button reads "Nothing recorded on track N yet" / "Play track N on its own" / "Stop track N"; the
+per-track LOAD button says "No saved chains yet — SAVE stores the current one" while there is nothing
+to load; the count-in and monitoring toggles name the state they are in. Shortcut-bearing controls
+repeat the shortcut (`⌘Z`, `⇧⌘Z`, `⌘−`, `⌘+`, `⌘N`), since the tooltip is one of the few places a
+macOS user looks for one.
+
+**Empty project — landed, but not where the finding pointed.** `ContentUnavailableView` went on the
+**monitor pane** (`Views.swift:2375`), not over the lane grid. Two reasons, and the first is the one
+that settles it: `importAudioFile` has **no menu item and no Open panel** — drag-and-drop onto a
+lane is the app's only way to import audio — so covering the lane grid with an empty state would
+have removed the only import affordance at exactly the moment it is most needed. That is a
+behavioural regression the section's own "the app's only inbound drag target" note argues against.
+The monitor pane is the region that is genuinely blank (a hairline and nothing else), so the message
+costs nothing there and says something real. Its condition is the meter's own — with the engine
+stopped `resetDisplay` has already zeroed the waveform, so it replaces a flat line and never a live
+trace — and it carries one action, *Monitor the Input*, which is one press and is why the pane was
+blank to begin with. The comment in the source records the deviation.
+
+**Empty track lane — a `ContentUnavailableView` does not fit, so it did not go there.** A lane is
+52 pt tall and the view is icon + title + description; the section asked for both an empty-project
+and an empty-lane instance without noticing that the second has nowhere to draw. What was actually
+missing from a lane was not a sentence but the **drop-target feedback**, which is the other half of
+this same finding ("no hover affordances"). A lane now tracks `isTargeted` on its own `.onDrop`
+(`Views.swift:795`) and answers a drag over it: the hairline brightens to the accent, the centred
+marker switches from `— EMPTY —` to **`DROP TO IMPORT`**, and the lane tints
+(`Views.swift:765`–`789`). Its tooltip (`:794`, from `laneHelp` at `:600`) says the two things a
+lane's shape cannot: with a clip, that more takes can be dropped on it; without one, that a file can
+be dropped *or* R pressed.
+
+**Drop targets: answered. Hover: still not.** The section's note covers two things and only one was
+done. `grep -rn "onHover" Sources/` still returns **nothing** — no control in the app reacts to a
+pointer resting on it. What is new is a reaction to a *drag*, which is a different state and the one
+the finding's own example (`.onDrop`) named. Whether a lane should also light up under a bare
+pointer is left open, and deliberately: a lane already changes under selection, and a second
+pointer-only highlight on the same hairline would be hard to tell from the first.
+
+**Progress — a partial answer, and it needs saying plainly.** The section says "a determinate
+`ProgressView` **driven by the existing `busyEdit` plumbing**". It could not be: `busyEdit` carries
+only a label, and `performOffMain` (`Support.swift:50-55`) is a plain `DispatchQueue.global.async`
+with no channel for a fraction. So the fraction needed new plumbing — `@Published var busyProgress:
+Double?` (`AudioManager.swift:109`) plus `reportEditProgress(_:)` (`:500`), which the work closure
+calls and which hops to the main thread itself. Only **two** loops report:
+
+- the **mixdown's mix pass** (`TransportController.swift:1088`–`:1153`), which already counted frames
+  per channel, so the fraction is frames-done over channels-times-frames;
+- a **project save's per-clip copies** (`ProjectController.swift:75`, `:91`), the only countable part
+  of a save and the part that gets long.
+
+Everything else keeps the indeterminate spinner it had, and that is the honest position rather than
+an unfinished one: the mixdown's **decode phase** and the export's single `write(from:)` have no
+countable steps to report, and a bar that invents a fraction stops being true partway across. The
+two views that draw it — the MIXDOWN button (`Views.swift:1850`) and a new `busyIndicator` in the top
+bar (`:490`, used at `:389`) — take the same branch: a bar when a fraction exists, a spinner when it
+does not.
+
+The reporter is **throttled to about fifteen a second** (`AudioManager.swift:494`–`:498`, under an
+`UnfairLock`). `busyProgress` is `@Published` on the manager that `LoopGridView` observes, and the
+mix loop passes its tick far more often than fifteen times a second — publishing each one would have
+cost more than the mix it was reporting on, in the largest view body in the app. The throttle is in
+the reporter rather than at the call sites, so every future caller inherits it.
+
+**Two things deliberately left undone.** The **empty FX chain** is arguably the best fit for
+`ContentUnavailableView` in the whole app — a full-height pane that currently draws nothing between
+`IN ·` and `OUT ·` — and it is not done. And **iOS was not touched** by this stage at all: no tooltip
+(no pointer), no empty state, no progress. `Views_iOS.swift` is unchanged by all three commits. The
+section never scoped iOS for this stage, but the app is a shared codebase and the omission is worth
+recording rather than discovering later.
+
+**Verification.** All four gates green on each of the three commits: macOS and iOS typecheck,
+`./package.sh`, `xcodebuild`. That settles compilation and nothing else. What no gate here can
+settle, and what the hardware run should check: that each of the 35 tooltips appears on hover and
+says something true about the control it is on; that dragging a file over a lane shows the target
+state and that dropping still imports exactly as it did; that the empty-project view appears only on
+an empty, idle, unmonitored project and that *Monitor the Input* dismisses it; and that the mixdown
+bar advances smoothly rather than in jumps, which the ~15 Hz throttle bounds by construction.
 
 ### Stage 9 — Reveal in Finder, Share, and completion notifications
 
@@ -1477,7 +1564,7 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 | **P2** | 3 — About + credits | ✅ done | Contained a licensing obligation |
 | **P2** | 6 — context menus | ✅ done | Depends on 1 |
 | **P3** | 7 — accessibility | ✅ done | Highest effort, cannot be auto-verified |
-| **P3** | 8 — tooltips / empty states / progress | | |
+| **P3** | 8 — tooltips / empty states / progress | ✅ done | |
 | **P3** | 9 — Reveal / Share / notifications | | |
 
 **Suggested execution order** differs from priority because of dependencies: **4 → 1 → 6 → 2 → 3 → 5 →
@@ -1486,15 +1573,20 @@ Stage 5 is late despite being P1 because the bundle-id decision in it may want a
 rather than a rushed one. That is how it turned out: the id was put to the user, and it took one
 question to settle rather than a guess.
 
-**Progress against that order, 2026-10-13:** the first seven have landed, so the next is **Stage 8**,
-then **9**. Stage 3 was moved ahead of Stage 5 and is done — the licensing obligation it carried has
+**Progress against that order, 2026-10-13:** the first eight have landed, so **Stage 9** is the last.
+Stage 3 was moved ahead of Stage 5 and is done — the licensing obligation it carried has
 been discharged, and discharged in the app rather than in the repository, which is where MIT wanted
-it.
+it. Stage 8 landed short of its own spec in three places and in full in one; see "What landed" under
+it, which is where the deviations are recorded rather than here.
 
 **Stage 7 carries a verification debt that no later stage discharges.** It is the one stage in this
 section whose four gates prove nothing about whether the work functions: the labels have never been
 heard, and the adjustable actions have never been reached. It needs a VoiceOver and Accessibility
-Inspector pass, and that pass has not happened.
+Inspector pass, and that pass has not happened. **Stage 8 adds to that debt rather than sharing
+it.** Its four gates are equally silent on all three of its subjects — a tooltip that exists in the
+source and never appears on hover, a `ContentUnavailableView` whose condition never fires, and a
+progress bar that jumps in fifths because the throttle is the only thing between it and the render
+loop all compile identically to the working version.
 
 ## 9.4 Verification
 
@@ -1545,6 +1637,15 @@ standard domain, and clean up their keys afterwards. Compile the file; don't res
 
 **Stage 7 (accessibility) cannot be verified by any gate in this document.** It needs VoiceOver and
 the Accessibility Inspector, by hand. Listing it as "compile-verified" would be a false claim.
+
+**Stage 8 is in the same position, for three separate reasons.** A `.help()` string is compiled
+either way and only becomes a tooltip under a pointer; a `ContentUnavailableView` behind a condition
+is drawn either way and only appears when the condition fires; and a `ProgressView` is drawn either
+way and only *advances* if the work closure actually calls the reporter — which is a control-flow
+property of a loop that no typecheck evaluates. The one thing this section's gates do settle for
+Stage 8 is the absence of a regression in what was already there, and the one thing they can be made
+to settle cheaply is the tooltip count, by grepping the source rather than the binary — which is the
+method §9.4's `strings` correction already prescribes.
 
 ## 9.5 Platform rules applied
 
@@ -1700,8 +1801,8 @@ row 8's `.toolbar` at `Views_iOS.swift:376`, which is now `:437`.
 | 7 | `NSApplicationDelegate` methods | ONE | **THREE** | `:600` `application(_:open:)` · `:625` terminate-after-close · `:635` `applicationShouldTerminate` |
 | 10 | Unsaved-changes guard on quit | ABSENT | **PRESENT** — Save / Cancel / Don't Save sheet | `App.swift:635-666` |
 | 12 | Window title / represented URL / edited dot | ABSENT | **PRESENT** | `App.swift:412-414`, `:500` |
-| 18 | Context menus | ABSENT (0) | **PRESENT — 3** | take `Views.swift:666` · track header `:882` · transport `:1788` |
-| 19 | Tooltips (`.help`) | 2 | **still 2**, lines drifted | `Views.swift:1126`, `:1861` |
+| 18 | Context menus | ABSENT (0) | **PRESENT — 3** | take `Views.swift:716` · track header `:950` · transport `:1890` |
+| 19 | Tooltips (`.help`) | 2 | **PRESENT — 35** | `Views.swift:273`–`:1986` |
 | 20 | Keyboard shortcuts | 20 bindings, all invisible | **split in two** | see below |
 | 24 | Focus / keyboard navigation | ABSENT — Tab repurposed | **unchanged** — Tab is still a monitor binding | `App.swift:110` |
 | 25 | Escape handling | ABSENT | **PRESENT** | `.onExitCommand` at `App.swift:509` |
@@ -1717,13 +1818,13 @@ bar**, not the monitor, and its line numbers are all stale. **Delete is new and 
 table entirely.**
 
 **Moved since:** item 1 (Settings scene) is **PRESENT** — `Settings {` at `App.swift:576`, the gear
-as a `SettingsLink` at `Views.swift:463`, and the scene supplies both the app-menu item and ⌘, with
+as a `SettingsLink` at `Views.swift:468`, and the scene supplies both the app-menu item and ⌘, with
 no `keyboardShortcut` written anywhere. Item 2 (About panel) is **PRESENT** — `AboutPanel.show()` from
 `CommandGroup(replacing: .appInfo)` at `App.swift:207`, Help replaced at `:215`, and the ported DSP's
 full MIT notice carried in the panel's credits. Item 9 (Open Recent) is **PRESENT** — a submenu inside
 the File group at `App.swift:238`, on `NSDocumentController` through `Sources/ProjectRecents.swift`,
-with the open event that makes its entries mean something handled at `App.swift:600`. Item 19 is
-still 2 tooltips. Item 4's second gap is closed, so File's remaining gap is *New Project* alone.
+with the open event that makes its entries mean something handled at `App.swift:600`. Item 4's second
+gap is closed, so File's remaining gap is *New Project* alone.
 
 **Items 26–29 are now PRESENT, and this is the largest single change since the snapshot.** The
 count went from `grep -rn "accessibility" Sources/*.swift | wc -l` → **0** to **129** (95 in
@@ -1736,11 +1837,24 @@ on the bare drag targets. Row 28: `@Environment(\.accessibilityReduceMotion)` in
 dot a glyph change. See "What landed" under Stage 7 for the two deviations — no drawer slide existed
 to gate, and Increase Contrast was deliberately not attempted.
 
+**Item 19 moved from 2 to 35 in Stage 8, and item 34 is no longer indeterminate.** The tooltip
+count is now `grep -c '\.help(' Sources/Views.swift` → **35**, spread across `TempoControl`,
+`TrackControlsView`, the zoom pair, the grid header, `SideEffectsPanelView` and `TransportBar`;
+nothing in `Views_iOS.swift` gained one, which is correct for a pointer-less platform. Item 34's
+single indeterminate `ProgressView` is now three call sites — a determinate bar in the MIXDOWN
+button (`Views.swift:1851`) fed by the mixdown's mix pass, and an indeterminate spinner as the
+fallback in both it (`:1854`) and the top bar's new `busyIndicator` (`:494`). Item 13's `onDrop` is
+at `Views.swift:795`, and it is no longer bare: the lane it belongs to tracks `isTargeted` and draws
+a drop state (§9.1 Stage 8). **Item 13 is still ABSENT as written** — there is still no drag *out*,
+which is Stage 9's.
+
 **Still ABSENT, verified again 2026-10-13:** items
 11 (autosave / crash recovery), 13 (drag **out** — one `onDrop` at
-`Views.swift:735`; the `onDragStart`/`onDragEnd` at `Views.swift:209-236` are a *fader's* undo-gesture
+`Views.swift:795`; the `onDragStart`/`onDragEnd` at `Views.swift:209-236` are a *fader's* undo-gesture
 closures, not SwiftUI `.onDrag`, so a grep for "onDrag" is misleading here), 14, 15, 16, 17, 21, 22,
-23, 30–33 and 35. Item 34 is still the single indeterminate `ProgressView` (`Views.swift:1754`).
+23, 30–33 and 35. `grep -rn "onHover" Sources/` still returns nothing: Stage 8 answered the drag
+half of its own "no hover affordances" note and left the pointer half alone, deliberately — see
+"What landed" under Stage 8.
 
 **Item 29 was also half wrong, and the correction is recorded rather than quietly dropped.** The
 snapshot called mute/solo and track identity "colour-only". Mute and solo are not: `RetroButtonStyle`
