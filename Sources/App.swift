@@ -21,17 +21,15 @@ final class KeyboardShortcutMonitor {
             }
 
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            let hasCmd = flags.contains(.command)
             let noMod = flags.isEmpty || flags == .capsLock
 
             // Match on the character the key produces, not on its physical position.
-            // keyCode is an ANSI-layout position, so a switch on it binds Cmd+S to
-            // whatever key sits where S does on a US board — on a QWERTZ keyboard that
-            // is the key printed "S" only by coincidence, and the shortcuts silently
-            // move. `charactersIgnoringModifiers` still applies Shift and Caps Lock, so
-            // it is lowercased before matching and the shortcut pairs that differ only
-            // by Shift (Cmd+S / Cmd+Shift+S, Cmd+Z / Cmd+Shift+Z) stay distinguished by
-            // the flag test in their `where` clause.
+            // keyCode is an ANSI-layout position, so a switch on it binds a shortcut to
+            // whatever key sits in that spot on a US board — on a QWERTZ keyboard that is
+            // the key printed with that letter only by coincidence, and the shortcuts
+            // silently move. What remains here is all unmodified, so `noMod` is the only
+            // modifier test left; the `where` clauses that used to separate the Shift
+            // pairs (⌘S/⌘⇧S, ⌘Z/⌘⇧Z) went with those bindings to the menu bar.
             guard let key = event.charactersIgnoringModifiers?.lowercased(), !key.isEmpty else {
                 return event
             }
@@ -70,57 +68,6 @@ final class KeyboardShortcutMonitor {
             case "7" where noMod: DispatchQueue.main.async { audio.selectedTrack = 6 }; return nil
             case "8" where noMod: DispatchQueue.main.async { audio.selectedTrack = 7 }; return nil
 
-            // Cmd+1–8 — Select take N on the selected track (the plain numbers above are
-            // taken by track selection, so the modifier is what distinguishes them)
-            case "1" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 1) }; return nil
-            case "2" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 2) }; return nil
-            case "3" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 3) }; return nil
-            case "4" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 4) }; return nil
-            case "5" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 5) }; return nil
-            case "6" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 6) }; return nil
-            case "7" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 7) }; return nil
-            case "8" where hasCmd: DispatchQueue.main.async { audio.selectClip(number: 8) }; return nil
-
-            // Cmd+Z — Undo
-            case "z" where hasCmd && !flags.contains(.shift):
-                DispatchQueue.main.async { audio.undo() }
-                return nil
-
-            // Cmd+Shift+Z — Redo
-            case "z" where hasCmd && flags.contains(.shift):
-                DispatchQueue.main.async { audio.redo() }
-                return nil
-
-            // Cmd+S — Save project
-            case "s" where hasCmd && !flags.contains(.shift):
-                DispatchQueue.main.async { audio.saveProject() }
-                return nil
-
-            // Cmd+Shift+S — Save project as
-            case "s" where hasCmd && flags.contains(.shift):
-                DispatchQueue.main.async { audio.saveProjectAs() }
-                return nil
-
-            // Cmd+O — Open project
-            case "o" where hasCmd:
-                DispatchQueue.main.async { audio.openProject() }
-                return nil
-
-            // Cmd+E — Export selected track
-            case "e" where hasCmd:
-                DispatchQueue.main.async { audio.exportTrack(audio.selectedTrack) }
-                return nil
-
-            // Cmd+T — Split clip at playhead
-            case "t" where hasCmd:
-                DispatchQueue.main.async { audio.splitClipAtPlayhead(audio.selectedTrack) }
-                return nil
-
-            // Cmd+D — Duplicate last clip on selected track
-            case "d" where hasCmd:
-                DispatchQueue.main.async { audio.duplicateClip(audio.selectedTrack) }
-                return nil
-
             // Return / Enter — Stop and return to start. Return sends CR; the numeric
             // keypad's Enter sends ETX, which is why both are listed here rather than
             // left to the character alone.
@@ -134,18 +81,14 @@ final class KeyboardShortcutMonitor {
                 return nil
 
             // Tab — Switch between Arrange and Monitor views
+            //
+            // Still here rather than in the View menu for the reason given on
+            // `Tape08Commands`: a bare key should not be handed to the menu bar until
+            // it is known that the responder chain still lets a text field win. Note
+            // Tab is macOS's focus-traversal key, so this binding and keyboard focus
+            // navigation cannot both exist — the View menu is where that gets settled.
             case "\t" where noMod:
                 DispatchQueue.main.async { audio.viewMode = audio.viewMode == 0 ? 1 : 0 }
-                return nil
-
-            // Cmd+= / Cmd++ — Zoom in timeline (Shift turns = into +)
-            case "=" where hasCmd, "+" where hasCmd:
-                DispatchQueue.main.async { audio.zoomIn() }
-                return nil
-
-            // Cmd+- / Cmd+_ — Zoom out timeline
-            case "-" where hasCmd, "_" where hasCmd:
-                DispatchQueue.main.async { audio.zoomOut() }
                 return nil
 
             // F — Toggle playhead follow
@@ -153,6 +96,11 @@ final class KeyboardShortcutMonitor {
                 DispatchQueue.main.async { audio.playheadFollow.toggle() }
                 return nil
 
+            // Everything reached by a ⌘ chord has moved to the menu bar and is no longer
+            // matched here: ⌘Z/⌘⇧Z, ⌘S/⌘⇧S, ⌘O, ⌘E, ⌘T, ⌘D, ⌘1–⌘8 and the ⌘-zoom pair.
+            // They appear in `Tape08Commands` with their key equivalents, so leaving a
+            // case for any of them would fire the command twice — once from the menu's
+            // key equivalent and once from here.
             default:
                 return event
             }
@@ -164,6 +112,180 @@ final class KeyboardShortcutMonitor {
     }
 
     deinit { remove() }
+}
+
+// ── Menu commands ───────────────────────────────────────────────────────────
+
+/// The app's commands, in the menu bar where they can be found.
+///
+/// The split between what carries a `.keyboardShortcut` here and what is left to
+/// `KeyboardShortcutMonitor` is deliberate, and it is not a half-finished migration:
+///
+///   • **⌘-modified commands carry their key equivalent and have left the monitor.**
+///     A ⌘ chord cannot be mistaken for typing, so a menu item may own it outright.
+///   • **Bare-key commands (Space, R, M, S, 1–8, comma, Return, Tab, F) appear here
+///     with no key equivalent and are still handled by the monitor.** AppKit
+///     documents Space and friends as keys it treats specially around the responder
+///     chain, and a focused text field is meant to win; but the app has BPM and
+///     preset-name fields, and the monitor's explicit `NSTextView`/`NSTextField`
+///     guard is exactly the protection a menu item cannot express. Giving these a key
+///     equivalent is worth doing only after it has been seen at runtime that typing a
+///     space in a focused field still types a space. Until then the menu still makes
+///     every one of these commands *visible and clickable*, which is most of the win.
+///
+/// `Toggle` and `Picker` are used rather than `Button` where a control has state, so
+/// the menu draws the platform checkmark instead of the app inventing one.
+struct Tape08Commands: Commands {
+    @ObservedObject var audio: AudioManager
+
+    // MARK: Derived state the menu needs
+
+    private var selectedClips: [TrackClip] { audio.tracks[audio.selectedTrack].clips }
+    private var anyClips: Bool { audio.tracks.contains { !$0.clips.isEmpty } }
+    private var busy: Bool { audio.busyEdit != nil }
+
+    private var mutedBinding: Binding<Bool> {
+        Binding(get: { audio.tracks[audio.selectedTrack].muted },
+                set: { want in
+                    if want != audio.tracks[audio.selectedTrack].muted {
+                        audio.toggleMute(audio.selectedTrack)
+                    }
+                })
+    }
+
+    private var soloBinding: Binding<Bool> {
+        Binding(get: { audio.tracks[audio.selectedTrack].solo },
+                set: { want in
+                    if want != audio.tracks[audio.selectedTrack].solo {
+                        audio.toggleSolo(audio.selectedTrack)
+                    }
+                })
+    }
+
+    var body: some Commands {
+
+        // ── File ────────────────────────────────────────────────────────────
+        // `.newItem` is the placement SwiftUI reserves for the top of the File menu.
+        // `Window`, not `WindowGroup`, means there is no New Window to replace.
+        CommandGroup(replacing: .newItem) {
+            Button("Open Project…") { audio.openProject() }
+                .keyboardShortcut("o", modifiers: .command)
+
+            Divider()
+
+            Button("Save") { audio.saveProject() }
+                .keyboardShortcut("s", modifiers: .command)
+            Button("Save As…") { audio.saveProjectAs() }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+
+            Divider()
+
+            Button("Export Track…") { audio.exportTrack(audio.selectedTrack) }
+                .keyboardShortcut("e", modifiers: .command)
+                .disabled(selectedClips.isEmpty || busy)
+
+            Button("Bounce Mixdown…") { audio.bounceMixdown() }
+                .disabled(!anyClips || busy)
+        }
+
+        // ── Edit ────────────────────────────────────────────────────────────
+        // Replaces the stock Undo/Redo, which were bound to a responder-chain
+        // `undoManager` this app never feeds — they showed as greyed and dead while
+        // the monitor quietly answered ⌘Z.
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") { audio.undo() }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(!audio.canUndo)
+            Button("Redo") { audio.redo() }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(!audio.canRedo)
+        }
+
+        // ── Transport ───────────────────────────────────────────────────────
+        CommandMenu("Transport") {
+            Button(audio.isPlaying ? "Stop" : "Play") {
+                if audio.isPlaying { audio.stopAll() } else { audio.playAll() }
+            }
+            Button("Record") { audio.toggleTrackRecord(audio.selectedTrack) }
+                .disabled(busy)
+
+            Divider()
+
+            Button("Return to Start") { audio.stopAll() }
+
+            Toggle("Metronome", isOn: $audio.metronomeEnabled)
+            Button("Tap Tempo") { audio.tapTempo() }
+            Button("Quantize") { audio.cycleQuantize() }
+            Toggle("Loop", isOn: $audio.loopEnabled)
+
+            Picker("Count-In", selection: $audio.countInBars) {
+                Text("Off").tag(0)
+                Text("1 Bar").tag(1)
+                Text("2 Bars").tag(2)
+                Text("4 Bars").tag(4)
+            }
+        }
+
+        // ── Track ───────────────────────────────────────────────────────────
+        CommandMenu("Track") {
+            Toggle("Mute Selected Track", isOn: mutedBinding)
+            Toggle("Solo Selected Track", isOn: soloBinding)
+
+            Divider()
+
+            Button("Split at Playhead") { audio.splitClipAtPlayhead(audio.selectedTrack) }
+                .keyboardShortcut("t", modifiers: .command)
+                .disabled(selectedClips.isEmpty || busy)
+            Button("Duplicate Last Clip") { audio.duplicateClip(audio.selectedTrack) }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(selectedClips.isEmpty || busy)
+
+            Divider()
+
+            // A Picker in a menu draws as a submenu with the platform checkmark, which
+            // is why tracks use one and takes (no published selection index exists for
+            // them) are plain buttons carrying their ⌘-number.
+            Picker("Select Track", selection: $audio.selectedTrack) {
+                ForEach(0..<Theme.trackCount, id: \.self) { i in
+                    Text("Track \(i + 1)").tag(i)
+                }
+            }
+
+            Menu("Select Take") {
+                ForEach(1...8, id: \.self) { n in
+                    Button("Take \(n)") { audio.selectClip(number: n) }
+                        .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .command)
+                }
+            }
+
+            Divider()
+
+            Button("Clear All Tracks") { audio.clearAll() }
+                .disabled(!anyClips)
+        }
+
+        // ── View additions ──────────────────────────────────────────────────
+        // `.toolbar` is the placement inside the *stock* View menu, so these land
+        // there rather than creating a second menu with the same name.
+        CommandGroup(after: .toolbar) {
+            Picker("Layout", selection: $audio.viewMode) {
+                Text("Arrange").tag(0)
+                Text("Monitor").tag(1)
+            }
+
+            Divider()
+
+            Toggle("Effects Chain", isOn: $audio.showEffects)
+            Toggle("Follow Playhead", isOn: $audio.playheadFollow)
+
+            Divider()
+
+            Button("Zoom In") { audio.zoomIn() }
+                .keyboardShortcut("=", modifiers: .command)
+            Button("Zoom Out") { audio.zoomOut() }
+                .keyboardShortcut("-", modifiers: .command)
+        }
+    }
 }
 
 // ── Window configuration ────────────────────────────────────────────────────
@@ -320,6 +442,7 @@ struct MonitorApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
+        .commands { Tape08Commands(audio: audio) }
     }
 }
 
