@@ -236,7 +236,17 @@ struct Tape08Commands: Commands {
             // promises: the playhead goes back to the top and playback carries on.
             Button("Return to Start") { audio.seek(toFraction: 0) }
 
-            Toggle("Metronome", isOn: $audio.metronomeEnabled)
+            // Routed through the controller rather than bound straight to the flag.
+            // `toggleMetronome` is also what starts and stops the click generator, and
+            // the toolbar button that does the same job already calls it — a bare
+            // assignment here would flip the state and leave up to two seconds of
+            // already-scheduled beats playing after the user switched it off.
+            Toggle("Metronome", isOn: Binding(
+                get: { audio.metronomeEnabled },
+                set: { want in
+                    if want != audio.metronomeEnabled { audio.toggleMetronome() }
+                }
+            ))
             Button("Tap Tempo") { audio.tapTempo() }
             Button("Quantize") { audio.cycleQuantize() }
             Toggle("Loop", isOn: $audio.loopEnabled)
