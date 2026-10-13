@@ -272,6 +272,12 @@ struct Tape08Commands: Commands {
             Button("Duplicate Last Clip") { audio.duplicateClip(audio.selectedTrack) }
                 .keyboardShortcut("d", modifiers: .command)
                 .disabled(selectedClips.isEmpty || busy)
+            // Ellipsis because it opens the editor rather than cutting anything. This
+            // item is not a nicety: the drawer that ⌘, replaced held the only Trim
+            // *button* in the app, so without it Trim would be reachable only from a
+            // take's context menu — a command §9.5 says belongs in the menu bar.
+            Button("Trim\u{2026}") { audio.openTrimEditor(audio.selectedTrack) }
+                .disabled(!audio.hasEditableClip || busy)
 
             Divider()
 
@@ -409,20 +415,23 @@ struct ContentView: View {
                 }
             }
             // The drawer gets its own space rather than covering the tape: the workspace
-            // slides right by exactly the open drawer's width and the panel floats in the
-            // gap. Both are applied here, outside LoopGridView's GeometryReader, so the
-            // grid measures the reduced width and the lane arithmetic needs no change.
+            // slides right by exactly its width and the panel floats in the gap. Applied
+            // here, outside LoopGridView's GeometryReader, so the grid measures the
+            // reduced width and the lane arithmetic needs no change.
             //
-            // Showing a panel still never *squeezes* the grid, which is what the overlay
-            // alone used to get wrong in the other direction — 660 pt of panel over a
-            // 1060 pt window sat on top of the track headers and the head unit.
+            // Showing it still never *squeezes* the grid, which is what the overlay alone
+            // used to get wrong in the other direction — the panel sat on top of the track
+            // headers and the head unit.
+            //
+            // Settings is not a drawer any more and is not inset for: it is the ⌘, window
+            // declared at the bottom of this file, so the FX panel is the only one left
+            // to make room for and there is no second panel to keep out of its way.
             .padding(.leading, audio.openDrawerWidth)
             .overlay(alignment: .leading) {
-                HStack(spacing: 0) {
-                    if audio.showSettings { SettingsPanel(audio: audio) }
-                    if audio.showEffects  { SideEffectsPanelView(audio: audio) }
+                if audio.showEffects {
+                    SideEffectsPanelView(audio: audio)
+                        .shadow(color: .black.opacity(0.55), radius: 16, x: 6, y: 0)
                 }
-                .shadow(color: .black.opacity(0.55), radius: 16, x: 6, y: 0)
             }
 
             TransportBar(audio: audio)
@@ -438,14 +447,16 @@ struct ContentView: View {
                                        representedURL: audio.projectURL,
                                        autosaveName: "Tape08MainWindow"))
         // Escape backs out of the innermost thing that is open, one press each: the trim
-        // editor, then a drawer, then the take selection. `.onExitCommand` rather than a
-        // case in KeyboardShortcutMonitor, because the monitor hands back every event it
-        // doesn't claim and a focused text field has first call on Escape — a raw NSEvent
-        // branch would cancel a trim out from under a field the user is mid-way through.
+        // editor, then the FX drawer, then the take selection. `.onExitCommand` rather
+        // than a case in KeyboardShortcutMonitor, because the monitor hands back every
+        // event it doesn't claim and a focused text field has first call on Escape — a raw
+        // NSEvent branch would cancel a trim out from under a field the user is mid-way
+        // through. The Settings window is a window of its own, so Escape there is its own
+        // business and this modifier cannot reach it.
         .onExitCommand {
             if audio.trimmingTrack != nil {
                 audio.cancelTrim()
-            } else if audio.showEffects || audio.showSettings {
+            } else if audio.showEffects {
                 audio.closeOpenDrawer()
             } else {
                 // Last resort, and safe when nothing is selected: clearing an already-nil
@@ -495,6 +506,17 @@ struct MonitorApp: App {
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
         .commands { Tape08Commands(audio: audio) }
+
+        // The Settings scene, and with it the two things §9 found missing: the app
+        // menu's "Settings…" item and its ⌘,. Both come from the scene existing at
+        // all — SwiftUI wires them — so neither is declared anywhere in `Tape08Commands`.
+        //
+        // It shares the one `AudioManager`. A second instance would be a second engine
+        // on the same audio device, which is the same reason the main window is a
+        // `Window` rather than a `WindowGroup`.
+        Settings {
+            SettingsView(audio: audio)
+        }
     }
 }
 

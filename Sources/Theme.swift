@@ -34,12 +34,14 @@ enum Theme {
     static let trackCount    = 8
     static let clipPeaks     = 64
 
-    /// Inspector drawer widths. The two drawers share one slot to the left of the tape
-    /// and the workspace is pushed right by whichever is open, so these are shared layout
-    /// constants rather than each panel's private business: the panel's own frame and the
-    /// inset that clears it are the same number, and must stay that way.
-    static let effectsDrawerWidth:  CGFloat = 400
-    static let settingsDrawerWidth: CGFloat = 260
+    /// Inspector drawer width. The panel sits in a slot to the left of the tape and the
+    /// workspace is pushed right by exactly this much while it is open, so it is a shared
+    /// layout constant rather than the panel's private business: the panel's own frame and
+    /// the inset that clears it are the same number, and must stay that way.
+    ///
+    /// There was a second one for Settings until Stage 2. It has no width here any more
+    /// because it is no longer a panel — it is the ⌘, window.
+    static let effectsDrawerWidth: CGFloat = 400
 
     /// The fixed right-hand column of a track row (play / mute / solo, fader, pan, meter).
     /// The column's own frame and the width `LoopGridView` reserves for it have to be the

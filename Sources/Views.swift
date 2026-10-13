@@ -401,8 +401,8 @@ struct TopBar: View {
                 }
             }
 
-            // FX + Settings — two drawers sharing one slot beside the tape, so the
-            // manager opens one and closes the other rather than stacking them.
+            // FX is the one drawer left; Settings moved out to the ⌘, window, so the two
+            // no longer share a slot or a mutual-exclusion rule.
             HStack(spacing: 6) {
                 Button(action: { audio.toggleEffectsDrawer() }) {
                     Text("FX")
@@ -413,13 +413,17 @@ struct TopBar: View {
                 }
                 .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: audio.showEffects, filled: audio.showEffects))
 
-                Button(action: { audio.toggleSettingsDrawer() }) {
+                // `SettingsLink`, not a button that opens a panel: it is the platform's
+                // own way to open the scene, which makes the gear and the app menu's
+                // "Settings…" the same command rather than two implementations of one.
+                // No `active`/`filled` state, because a window is not open or closed by
+                // this view and there is no flag left to draw it from.
+                SettingsLink {
                     Image(systemName: "gearshape")
                         .font(.system(size: 11, weight: .medium))
                         .padding(.horizontal, 8).padding(.vertical, 6)
-                        .foregroundColor(audio.showSettings ? Theme.bg : Theme.textSecondary)
                 }
-                .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: audio.showSettings, filled: audio.showSettings))
+                .buttonStyle(RetroButtonStyle(tint: Theme.accent))
             }
         }
         .padding(.horizontal, 28).padding(.vertical, 10)
@@ -2365,212 +2369,6 @@ struct TrimEditorView: View {
         }
         .background(Theme.bg)
         .overlay(Rectangle().stroke(Theme.gold.opacity(0.3), lineWidth: 1))
-    }
-}
-
-// ── Settings Panel ──────────────────────────────────────────────────────────
-
-struct SettingsPanel: View {
-    @ObservedObject var audio: AudioManager
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Text("SETTINGS")
-                    .font(.system(size: 11, weight: .black, design: .monospaced))
-                    .tracking(3)
-                    .foregroundColor(Theme.textSecondary)
-                Spacer()
-            }
-            .padding(16)
-            Rectangle().fill(Theme.accent.opacity(0.15)).frame(height: 1)
-
-            VStack(alignment: .leading, spacing: 16) {
-                // Save location
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("SAVE LOCATION")
-                        .font(.system(size: 8, weight: .black, design: .monospaced))
-                        .tracking(2)
-                        .foregroundColor(Theme.textEngraved)
-                    HStack(spacing: 8) {
-                        Text(audio.saveLocation.path.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~"))
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundColor(Theme.textPrimary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        Button { audio.changeSaveLocation() } label: {
-                            Text("CHANGE")
-                                .font(.system(size: 8, weight: .black, design: .monospaced))
-                                .tracking(1)
-                                .padding(.horizontal, 8).padding(.vertical, 5)
-                                .foregroundColor(Theme.accent)
-                                .background(Theme.surfaceInset)
-                                .overlay(Rectangle().stroke(Theme.accent.opacity(0.3), lineWidth: 1))
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-
-                Rectangle().fill(Theme.line).frame(height: 1)
-
-                // Audio info
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("AUDIO")
-                        .font(.system(size: 8, weight: .black, design: .monospaced))
-                        .tracking(2)
-                        .foregroundColor(Theme.textEngraved)
-
-                    settingsRow("Sample Rate", audio.sampleRateString)
-
-                    if let inputName = audio.inputDevices.first(where: { $0.id == audio.selectedInputID })?.name {
-                        settingsRow("Input", inputName)
-                    }
-                    if let outputName = audio.outputDevices.first(where: { $0.id == audio.selectedOutputID })?.name {
-                        settingsRow("Output", outputName)
-                    }
-                }
-
-                Rectangle().fill(Theme.line).frame(height: 1)
-
-                // Export
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("EXPORT")
-                        .font(.system(size: 8, weight: .black, design: .monospaced))
-                        .tracking(2)
-                        .foregroundColor(Theme.textEngraved)
-
-                    Button { audio.exportTrack(audio.selectedTrack) } label: {
-                        HStack(spacing: 6) {
-                            Image(systemName: "square.and.arrow.up")
-                                .font(.system(size: 10, weight: .bold))
-                            Text("EXPORT TRK \(String(format: "%02d", audio.selectedTrack + 1))")
-                                .font(.system(size: 10, weight: .black, design: .monospaced))
-                                .tracking(1)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .foregroundColor(Theme.accent)
-                        .background(Theme.surfaceInset)
-                        .overlay(Rectangle().stroke(Theme.accent.opacity(0.3), lineWidth: 1))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(audio.busyEdit != nil)
-                }
-
-                Rectangle().fill(Theme.line).frame(height: 1)
-
-                // Clip editing
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("CLIP EDIT")
-                        .font(.system(size: 8, weight: .black, design: .monospaced))
-                        .tracking(2)
-                        .foregroundColor(Theme.textEngraved)
-
-                    HStack(spacing: 6) {
-                        // SPLIT reads the playhead, so it needs one: either a running
-                        // track, or a position parked on a stopped one by dragging the
-                        // bar ruler. Without the second case the button would refuse a
-                        // cut that ⌘T performs, since ⌘T has no such check.
-                        let splitReady = audio.hasEditableClip
-                            && (audio.tracks[audio.selectedTrack].isPlaying || audio.seekFraction != nil)
-                        Button { audio.splitClipAtPlayhead(audio.selectedTrack) } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "scissors")
-                                    .font(.system(size: 9, weight: .bold))
-                                Text("SPLIT")
-                                    .font(.system(size: 9, weight: .black, design: .monospaced))
-                                    .tracking(1)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 7)
-                            .foregroundColor(splitReady ? Theme.accent : Theme.textTertiary)
-                            .background(Theme.surfaceInset)
-                            .overlay(Rectangle().stroke(Theme.accent.opacity(0.3), lineWidth: 1))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!splitReady || audio.busyEdit != nil)
-
-                        Button { audio.duplicateClip(audio.selectedTrack) } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "doc.on.doc")
-                                    .font(.system(size: 9, weight: .bold))
-                                Text("DUP")
-                                    .font(.system(size: 9, weight: .black, design: .monospaced))
-                                    .tracking(1)
-                            }
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 7)
-                            .foregroundColor(audio.tracks[audio.selectedTrack].clips.isEmpty ? Theme.textTertiary : Theme.accent)
-                            .background(Theme.surfaceInset)
-                            .overlay(Rectangle().stroke(Theme.accent.opacity(0.3), lineWidth: 1))
-                            .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(!audio.hasEditableClip || audio.busyEdit != nil)
-                    }
-
-                    Button { audio.openTrimEditor(audio.selectedTrack) } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "timeline.selection")
-                                .font(.system(size: 9, weight: .bold))
-                            Text("TRIM")
-                                .font(.system(size: 9, weight: .black, design: .monospaced))
-                                .tracking(1)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 7)
-                        .foregroundColor(audio.tracks[audio.selectedTrack].clips.isEmpty ? Theme.textTertiary : Theme.gold)
-                        .background(Theme.surfaceInset)
-                        .overlay(Rectangle().stroke(Theme.gold.opacity(0.3), lineWidth: 1))
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!audio.hasEditableClip || audio.busyEdit != nil)
-
-                    Text("\u{2318}T SPLIT  \u{2318}D DUP  \u{2318}1\u{2013}8 TAKE")
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundColor(Theme.textTertiary.opacity(0.6))
-                }
-
-                Rectangle().fill(Theme.line).frame(height: 1)
-
-                // Session info
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("SESSION")
-                        .font(.system(size: 8, weight: .black, design: .monospaced))
-                        .tracking(2)
-                        .foregroundColor(Theme.textEngraved)
-
-                    let clipCount = audio.tracks.reduce(0) { $0 + $1.clips.count }
-                    settingsRow("Clips", "\(clipCount)")
-                    settingsRow("Tracks Used", "\(audio.tracks.filter { !$0.clips.isEmpty }.count) / \(Theme.trackCount)")
-                    settingsRow("Effects", "\(audio.liveChain.filter { $0.enabled }.count) active")
-                }
-            }
-            .padding(16)
-
-            Spacer()
-        }
-        .frame(width: Theme.settingsDrawerWidth)
-        .background(Theme.bg)
-        .overlay(Rectangle().fill(Theme.textPrimary.opacity(0.10)).frame(width: 1), alignment: .trailing)
-    }
-
-    private func settingsRow(_ label: String, _ value: String) -> some View {
-        HStack {
-            Text(label)
-                .font(.system(size: 10, weight: .medium, design: .monospaced))
-                .foregroundColor(Theme.textSecondary)
-            Spacer()
-            Text(value)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .foregroundColor(Theme.textPrimary)
-                .lineLimit(1)
-        }
     }
 }
 

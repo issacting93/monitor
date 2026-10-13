@@ -31,41 +31,28 @@ class AudioManager: ObservableObject {
     // Effect chain (replaces hardcoded EQ/Reverb/Delay/Tape)
     @Published var liveChain: [ChainSlot] = []
     @Published var showEffects = false
-    @Published var showSettings = false
 
-    // MARK: - Inspector drawers
+    // MARK: - Inspector drawer
 
-    /// The two inspector drawers occupy the same space to the left of the tape, so only
-    /// one can be open: opening either closes the other. They are driven through these
-    /// rather than by assigning the flags directly, so no call site can open both and
-    /// leave the tape pushed right by two widths with one panel hidden behind the other.
-
-    func toggleEffectsDrawer() {
-        showEffects.toggle()
-        if showEffects { showSettings = false }
-    }
-
-    func toggleSettingsDrawer() {
-        showSettings.toggle()
-        if showSettings { showEffects = false }
-    }
-
-    /// How far the workspace is pushed right to clear whichever drawer is open.
-    var openDrawerWidth: CGFloat {
-        if showEffects { return Theme.effectsDrawerWidth }
-        if showSettings { return Theme.settingsDrawerWidth }
-        return 0
-    }
-
-    /// Closes whichever drawer is open, if any.
+    /// The one inspector drawer, which occupies the space to the left of the tape.
     ///
-    /// Escape is the only caller. The two buttons *toggle*, so routing Escape through
-    /// them would make a press with nothing open spring a drawer open; closing is all
-    /// Escape may ever do.
-    func closeOpenDrawer() {
-        showEffects = false
-        showSettings = false
+    /// Settings used to be the second one, sharing that space under a rule that opening
+    /// either closed the other. It is now the ⌘, window in `SettingsView.swift`, so there
+    /// is nothing left to keep out of the way and no exclusion rule left to enforce.
+
+    func toggleEffectsDrawer() { showEffects.toggle() }
+
+    /// How far the workspace is pushed right to clear the open drawer.
+    var openDrawerWidth: CGFloat {
+        showEffects ? Theme.effectsDrawerWidth : 0
     }
+
+    /// Closes the drawer, if open.
+    ///
+    /// Escape is the only caller. The toolbar button *toggles*, so routing Escape
+    /// through it would make a press with nothing open spring the panel open; closing is
+    /// all Escape may ever do.
+    func closeOpenDrawer() { showEffects = false }
 
     // Effect chain presets
     @Published var presetNames: [String] = []
