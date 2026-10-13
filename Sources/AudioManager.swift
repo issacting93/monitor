@@ -243,6 +243,30 @@ class AudioManager: ObservableObject {
 
     func toggleMasterLimiter() { engine.toggleMasterLimiter() }
 
+    // MARK: - Device Selection
+
+    /// Selects the input device and rebuilds the graph on it when monitoring is running.
+    ///
+    /// A picker must not assign `selectedInputID` directly. The engine reads that
+    /// property exactly once, inside `EngineController.start`, so a bare assignment
+    /// only moves the label: the graph stays on the previous device and the UI goes on
+    /// advertising a live engine on a device the user isn't listening to. Routing is
+    /// decided at start time, which is why changing the device has to restart.
+    func selectInput(_ id: DeviceID?) {
+        guard id != selectedInputID else { return }
+        selectedInputID = id
+        if isMonitoring { startMonitoring() }
+    }
+
+    /// Selects the output device and rebuilds the graph on it when monitoring is running.
+    /// `switchOutput` already restarts — on macOS a differing output is what makes the
+    /// engine pin itself to a private aggregate — so this only adds the no-op guard,
+    /// keeping a re-pick of the current device from tearing the graph down and rebuilding it.
+    func selectOutput(_ id: DeviceID?) {
+        guard let id, id != selectedOutputID else { return }
+        switchOutput(to: id)
+    }
+
     // MARK: - Chain Effects (forwarders — behaviour lives in EffectsChainController)
 
     func toggleSlotBypass(_ slotIndex: Int) { effects.toggleSlotBypass(slotIndex) }

@@ -365,7 +365,14 @@ struct TopBar: View {
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .tracking(2)
                         .foregroundColor(Theme.textTertiary)
-                    Picker("", selection: $audio.selectedInputID) {
+                    // Routed through `selectInput` rather than bound straight to the
+                    // published property: the engine only reads the selection at start
+                    // time, so a direct binding would relabel the header and leave the
+                    // graph on the old device.
+                    Picker("", selection: Binding(
+                        get: { audio.selectedInputID },
+                        set: { audio.selectInput($0) }
+                    )) {
                         ForEach(audio.inputDevices) { d in
                             Text(d.name).tag(Optional(d.id))
                         }
@@ -378,7 +385,13 @@ struct TopBar: View {
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .tracking(2)
                         .foregroundColor(Theme.textTertiary)
-                    Picker("", selection: $audio.selectedOutputID) {
+                    // Same reason as the input picker above: selecting an output is what
+                    // makes the engine build a private aggregate, and that only happens
+                    // on a restart.
+                    Picker("", selection: Binding(
+                        get: { audio.selectedOutputID },
+                        set: { audio.selectOutput($0) }
+                    )) {
                         ForEach(audio.outputDevices) { d in
                             Text(d.name).tag(Optional(d.id))
                         }
