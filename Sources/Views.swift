@@ -328,6 +328,22 @@ struct TempoControl: View {
 struct TopBar: View {
     @ObservedObject var audio: AudioManager
 
+    /// The file the share picker should open for, or nil. Set by the SHARE button and
+    /// cleared by `ShareAnchor` once the picker is up — see that type for why it is a
+    /// binding rather than a direct call.
+    @State private var pendingShare: URL? = nil
+
+    /// The bordered text label the two export actions are drawn with.
+    private func barActionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9, weight: .bold, design: .monospaced))
+            .tracking(1)
+            .padding(.horizontal, 8).padding(.vertical, 5)
+            .foregroundColor(Theme.textPrimary)
+            .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.18), lineWidth: 1))
+            .contentShape(Rectangle())
+    }
+
     private var statusText: String {
         if audio.isRecording { return "REC" }
         if audio.isPlaying { return "PLAY" }
@@ -397,27 +413,33 @@ struct TopBar: View {
                     .truncationMode(.middle)
                     .frame(maxWidth: 300, alignment: .leading)
 
-                // Where the last export went. Appears only once there is a file — before
-                // one exists there is nothing to reveal, and a permanently greyed control
-                // beside the status is one more thing to read for no reason.
+                // Where the last export went, and what can be done with it. Appears only
+                // once there is a file — before one exists there is nothing to reveal, and
+                // a permanently greyed control beside the status is one more thing to read
+                // for no reason.
                 //
                 // The filename is in the tooltip rather than printed here: the status
                 // string beside it already names the file at the moment it is written, and
                 // this bar is the tightest row in the app at the 1280 pt minimum.
                 if let exported = audio.lastExportURL {
                     Button { ExportActions.reveal(exported) } label: {
-                        Text("REVEAL")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .tracking(1)
-                            .padding(.horizontal, 8).padding(.vertical, 5)
-                            .foregroundColor(Theme.textPrimary)
-                            .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.18), lineWidth: 1))
-                            .contentShape(Rectangle())
+                        barActionLabel("REVEAL")
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Reveal last export in Finder")
                     .accessibilityHint("Shows \(exported.lastPathComponent) in a Finder window")
                     .help("Show \(exported.lastPathComponent) in Finder")
+
+                    // The anchor sits behind the SHARE button so the picker points at the
+                    // control that opened it rather than at the middle of the window.
+                    Button { pendingShare = exported } label: {
+                        barActionLabel("SHARE")
+                    }
+                    .buttonStyle(.plain)
+                    .background(ShareAnchor(pending: $pendingShare))
+                    .accessibilityLabel("Share last export")
+                    .accessibilityHint("Opens the share menu for \(exported.lastPathComponent)")
+                    .help("Send \(exported.lastPathComponent) to another app or service")
                 }
 
                 Text(audio.sampleRateString.uppercased())

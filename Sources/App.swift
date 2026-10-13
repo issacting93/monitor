@@ -268,6 +268,14 @@ struct Tape08Commands: Commands {
             }
             .keyboardShortcut("r", modifiers: [.command, .shift])
             .disabled(audio.lastExportURL == nil)
+
+            // No shortcut, and none to give it: ⇧⌘S is Save As and the obvious letters
+            // beside it are taken. Named "Last Export" like Reveal, so the File menu
+            // reads as one group of things that act on the same file.
+            Button("Share Last Export…") {
+                if let url = audio.lastExportURL { ExportActions.share(url) }
+            }
+            .disabled(audio.lastExportURL == nil)
         }
 
         // ── Edit ────────────────────────────────────────────────────────────
