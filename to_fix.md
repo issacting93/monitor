@@ -906,7 +906,7 @@ No menus. No Settings scene. No About. No document-open handling. No dirty indic
 
 ### 9.0.1 Status — updated 2026-10-13
 
-Three of the nine stages have landed, in the recommended order's first three positions. The audit
+Four of the nine stages have landed, in the recommended order's first four positions. The audit
 block above and §9.6 are the **original 2026-10-12 snapshot** and are left in place as the record of
 what the gap was; §9.6 carries a status column showing what has since changed, and the line numbers
 there have been re-resolved.
@@ -916,17 +916,18 @@ there have been re-resolved.
 | 4 — dirty guard, title, frame | ✅ landed | `b841bb7` (quit guard) · `1230728` (title, edited dot, remembered frame) |
 | 1 — the menu bar | ✅ landed | `3e35349` |
 | 6 — context menus + Escape | ✅ landed | `61b0611` · `f4162de` (Delete) |
-| 2 — Settings scene | not started | |
+| 2 — Settings scene | ✅ landed | `6f8e503` (menu metronome) · `de99668` (the window) · `d0de50b` (preferences) · `d3af3a1` (devices) |
 | 3 — About, Help, `CREDITS.md` | not started — **carries the licensing obligation** | |
 | 5 — documents, recents, UTI, plist | not started | |
 | 7 — accessibility | not started | |
 | 8 — tooltips, empty states, progress | not started | |
 | 9 — Reveal, Share, notifications | not started | |
 
-Two things landed that this section did not plan, because they were found against the built app
-rather than by reading it. Both are recorded in §9.1.1: a pair of **device-selection defects** where
-the header's IN/OUT pickers moved a label without moving the audio, and a Transport item that
-duplicated Stop.
+Three things landed that this section did not plan, two of them found against the built app rather
+than by reading it. All three are recorded in §9.1.1: a pair of **device-selection defects** where
+the header's IN/OUT pickers moved a label without moving the audio, a Transport item that duplicated
+Stop, and — found while writing Stage 2 — the **Metronome item in the Transport menu**, which flipped
+the flag without going through the controller that also stops the click generator.
 
 **Research base:** Apple's *Building and customizing the menu bar with SwiftUI*; the community
 codification in `sindresorhus/human-interface-guidelines-extras`; and the macOS design /
@@ -1027,7 +1028,7 @@ matched *ahead of* the responder chain, so it would fire inside a focused preset
 monitor's `firstResponder` guard is the protection a menu item cannot express, and the reasoning is
 recorded in `Tape08Commands`' header comment so it does not read as a half-finished migration.
 
-### Stage 2 — A real Settings window (⌘,)
+### Stage 2 — A real Settings window (⌘,) — ✅ LANDED (`6f8e503`, `de99668`, `d0de50b`, `d3af3a1`)
 
 **Problem.** `showSettings` is a floating drawer holding what are, by HIG definition, *preferences*.
 There is no ⌘, and no Settings item in the app menu.
@@ -1045,6 +1046,51 @@ that split turns out wrong, the revert is one commit.
 
 Per the HIG rules quoted in §9.5: not translucent, Escape must not close it (the `Settings` scene
 gives this for free), traffic-light buttons disabled-but-present, and no About/licence tab inside it.
+
+#### What landed, 2026-10-13
+
+Four commits, not one, because the parts are independently revertible and one of them was a defect
+found while writing the others.
+
+| Commit | What |
+|---|---|
+| `6f8e503` | **Not this stage's work** — the Transport menu's Metronome item. See §9.1.1 |
+| `de99668` | The `Settings {}` scene, `SettingsView.swift`, the gear as a `SettingsLink`, `showSettings` and the 206-line `SettingsPanel` deleted, `SettingsPanel`'s Trim button relocated to the Track menu |
+| `d0de50b` | `Preferences.swift` — seven scalars write through from `AudioManager` |
+| `d3af3a1` | `AudioDevice.uid`; the chosen input/output remembered across launches |
+
+**Five consequences worth recording, because each changes behaviour rather than only layout.**
+
+1. **The window is a preference store, so seven properties now persist.** Count-in bars, master
+   limiter, click tempo and level, loop, timeline zoom, playhead follow. The doc called these
+   "defaults"; they are bound to the live value, so the *live value is the preference* — load a
+   project saved at 90 BPM and 90 is what the next launch starts at. Honest for a window that shows
+   the current value, but it is a change from the previous always-120 startup.
+2. **Device choice persists too**, by CoreAudio UID rather than by device id, which the HAL reuses.
+   Restore sits ahead of the name heuristic in `loadDevices`; persist sits in the selection paths and
+   deliberately *not* in `loadDevices`, whose fallback also fires when the remembered device is merely
+   unplugged. Output keeps the system default ahead of a remembered device.
+3. **The device rows were the one part of this window that needed routing, not binding.**
+   `selectInput`, `selectOutput` and `toggleMasterLimiter` each do work beyond assignment — restart
+   the graph, rebuild the aggregate, move a node's bypass — so a `$`-binding would have moved the
+   control and left the audio where it was. That is the §9.1.1 bug this stage could easily have
+   reintroduced three times over.
+4. **Trim had to move to a menu.** `SettingsPanel` held the app's only Trim *button*; deleting the
+   panel would have left Trim reachable only from a take's context menu, which §9.5 says belongs in
+   the menu bar anyway. So `Track ▸ Trim…` is a requirement of this stage, not scope creep.
+   EXPORT, SPLIT and DUP were already in menus.
+5. **A fifth section, "Current Session", is a deviation.** The doc specifies four. The panel being
+   deleted was the only place the session counts — clips, tracks used, effects active — appeared, so
+   they are kept as a read-only section rather than silently dropped.
+
+**Not a deviation:** the window uses a stock `Form` inside a `Settings` scene rather than the app's
+retro theme. A `Form` in a `Settings` scene is drawn by the system, and the HIG rules quoted in §9.5
+are about conforming to it rather than restyling it. The theme still governs the main window.
+
+**Unverified without the hardware run:** the window's layout, that ⌘, and the app-menu item appear,
+that the gear opens it, that Escape does *not* close it, the traffic-light state, and every
+persistence round trip through a real launch. The store's accessor logic and the
+`didSet`-over-`@Published` mechanism were both verified by probe (§9.4).
 
 ### Stage 3 — About panel, Help menu, and credits
 
@@ -1216,6 +1262,7 @@ Not in the plan, because none of it was visible by reading — each was reported
 | the signal meters stayed at −57.8 dB with the OP-XY selected | the header's IN/OUT pickers assigned `selectedInputID`/`selectedOutputID` directly, but the engine reads those **once, inside `EngineController.start`**. Nothing observed the properties — no `onChange`, no `didSet` — so picking the OP-XY relabelled the picker and left the graph pinned to the built-in mic. The engine's own status string was the only honest clue on screen | `bb52b9f` — the pickers route through `selectInput`/`selectOutput`, which restart the graph when monitoring. **Hardware-confirmed by the user** ("yes it reads and there is sound"), which makes this the first audio-path behaviour verified by ear in some time |
 | the status line named a device the audio was not going to | `currentOutputName` reports the **system default**, which is only the destination when no separate output is chosen. With one, the engine sits on a private input+output aggregate and the audio reaches that selection | `53fb570` — the status names the routed output when it differs from the input |
 | — | found while writing Stage 6: `stopAll` already returns to the start and clears `seekFraction`, so the Transport menu's **Return to Start was an exact duplicate of Stop** | `66b24c4` — it seeks now, which is what the label promises |
+| — | found while writing Stage 2: the Transport menu's **Metronome** item bound `isOn: $audio.metronomeEnabled`, but the flag is not the click — `MetronomeController.toggle` is what starts and stops the generator, and the toolbar button that does the same job already called it. Switching the click off from the menu flipped the state and left up to ~2 s of already-scheduled beats playing (the refill queue) | `6f8e503` — the item routes through `toggleMetronome` |
 
 **The iOS gap this exposed.** `switchOutput` is gated on `io.outputSelectionSupported`, and the iOS
 provider reports `false` — so `Views_iOS.swift` has no route picker at all, and a take recorded on
@@ -1253,8 +1300,8 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 | **P0** | 4 — dirty guard | ✅ done | Only stage that prevents **data loss**. Can land any time; do it regardless of the rest. |
 | **P1** | 1 — menu bar | ✅ done | Largest discoverability gap; every action already exists, so it is wiring |
 | **P1** | 5 — documents + plist reconciliation | next but one | Double-click is broken *today* and the plists have diverged |
-| **P2** | 2 — Settings scene | next | Needed before shipping to MAS; ⌘, is expected |
-| **P2** | 3 — About + credits | **overdue** | Contains a licensing obligation |
+| **P2** | 2 — Settings scene | ✅ done | Needed before shipping to MAS; ⌘, is expected |
+| **P2** | 3 — About + credits | **overdue — next** | Contains a licensing obligation |
 | **P2** | 6 — context menus | ✅ done | Depends on 1 |
 | **P3** | 7 — accessibility | | Highest effort, cannot be auto-verified |
 | **P3** | 8 — tooltips / empty states / progress | | |
@@ -1265,10 +1312,10 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 Stage 5 is late despite being P1 because the bundle-id decision in it may want a deliberate answer
 rather than a rushed one.
 
-**Progress against that order, 2026-10-13:** the first three have landed, so the next is **Stage 2**,
-then **3**. Stage 3 is now the oldest outstanding item with an external obligation attached — the
-Airwindows attribution is a licensing term, not polish — and it has been overtaken by three stages
-that carry no such obligation. Worth moving ahead of Stage 5 if the order is being re-cut.
+**Progress against that order, 2026-10-13:** the first four have landed, so the next is **Stage 3**,
+then **5**. Stage 3 is now the oldest outstanding item with an external obligation attached — the
+Airwindows attribution is a licensing term, not polish — and it has been overtaken by four stages
+that carry no such obligation. It is next, and worth keeping ahead of Stage 5.
 
 ## 9.4 Verification
 
@@ -1284,10 +1331,16 @@ $TC -typecheck -parse-as-library -target arm64-apple-ios17.0-simulator -sdk "$IO
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project Tape08/Tape08.xcodeproj -scheme Tape08 build
 ```
 
-**Stages 1–3 and 6 are largely self-verifying**: a menu item that exists in the built app is a menu
+**Stages 1, 3 and 6 are largely self-verifying**: a menu item that exists in the built app is a menu
 item that exists. The honest limit is that **whether a menu item is enabled at the right moment, and
 whether its shortcut collides with a live monitor binding, is a runtime property** — §8.6's keyboard
 check must be re-run after Stage 1, and it must now exercise the *menus*, not just the keys.
+
+**Stage 2 is the exception, and it is worth being plain about it**: every gate below can pass while
+the window is unusable. A `Form` in a `Settings` scene either appears at ⌘, or it doesn't; its
+traffic-light state, its Escape behaviour and its controls' widths are all runtime properties that no
+compiler checks. What *is* offline-checkable in it — the preferences store and the device UID match
+rule — was probed, as above. The rest is on the hardware run.
 
 ⚠️ **Correction, 2026-10-13 — `strings` does not verify a command set, and this section previously
 said it did.** It was tried against the built bundle and reported `TRIM`, `APPLY` and `Ready` as
@@ -1297,6 +1350,19 @@ bytes or fewer inline in the instruction stream rather than in the string table*
 status strings, and essentially every short label — and a "not found" from it proves nothing in
 either direction. It was retracted rather than left standing. Verifying a menu now means launching
 the app and reading the menu bar; there is no offline substitute.
+
+**Probes, and the trap in them.** Stage 2's `Preferences` store is the first thing in this section
+whose logic is testable offline, and it was tested: a throwaway `main.swift` compiled against the
+source and run, print-per-check, covering absent keys, round trips, a stored zero that must not read
+back as the default, a bogus value, and a mistyped one. That is stronger evidence than a typecheck,
+and it is how the `didSet`-over-`@Published` assumption behind the whole write-through was checked —
+direct assignment, key-path assignment (what a SwiftUI `$audio.x` compiles to), no fire during
+`init`, and the publisher still firing.
+
+The trap: **a probe that re-implements the logic tests the probe.** The first version of the UID
+probe spelled the accessors out again against a scratch `UserDefaults` suite and passed — while
+proving nothing about `Preferences.swift`. Both probes now compile the real file, against the
+standard domain, and clean up their keys afterwards. Compile the file; don't restate it.
 
 **Stage 7 (accessibility) cannot be verified by any gate in this document.** It needs VoiceOver and
 the Accessibility Inspector, by hand. Listing it as "compile-verified" would be a false claim.
@@ -1459,7 +1525,11 @@ field. So the table's rows for ⌘Z, ⌘S, ⌘O, ⌘E, ⌘T, ⌘D, ⌘1–⌘8 a
 bar**, not the monitor, and its line numbers are all stale. **Delete is new and absent from that
 table entirely.**
 
-**Still ABSENT, verified again 2026-10-13:** items 1 (Settings scene — `App.swift:412`), 2 (About),
+**Moved since:** item 1 (Settings scene) is **PRESENT** — `Settings {` at `App.swift:517`, the gear
+as a `SettingsLink` at `Views.swift:421`, and the scene supplies both the app-menu item and ⌘, with
+no `keyboardShortcut` written anywhere. Item 19 is still 2 tooltips.
+
+**Still ABSENT, verified again 2026-10-13:** items 2 (About),
 9 (Open Recent), 11 (autosave / crash recovery), 13 (drag **out** — one `onDrop` at
 `Views.swift:668`; the `onDragStart`/`onDragEnd` at `Views.swift:190-217` are a *fader's* undo-gesture
 closures, not SwiftUI `.onDrag`, so a grep for "onDrag" is misleading here), 14, 15, 16, 17, 21, 22,
