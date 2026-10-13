@@ -8,7 +8,7 @@ shared audio core.
 - **UI:** SwiftUI (separate macOS and iPad view layers)
 - **Audio:** AVFoundation (`AVAudioEngine`) + CoreAudio HAL / `AVAudioSession` (device layer) +
   CoreMIDI (track follow)
-- **Source:** 25 files in `Sources/`, 8,852 lines (shared core + both UIs)
+- **Source:** 31 files in `Sources/`, 10,682 lines (shared core + both UIs)
 - **Build paths:** `package.sh` (macOS, head-less `swiftc`), `Tape08/` (macOS Xcode project),
   `Tape08iPad/` (iPad Xcode project)
 
@@ -78,6 +78,12 @@ open work live in [to_fix.md](to_fix.md); product intent lives in
 - **Split at playhead**, **duplicate clip**, **clear all**.
 - **Import** (file panel + drag-and-drop onto a lane) and **export** a track to WAV.
 - **Mixdown** ("bounce") of all audible tracks to a single WAV (equal-power pan, tanh soft-clip).
+- **Getting a file back out** (`[mac]`) — the last file the app wrote is remembered
+  (`AudioManager.lastExportURL`) and shown as a chip in the top bar: click it to reveal it in Finder,
+  drag it — or drag a take straight out of a lane — to another app or a DAW. SHARE, and *Reveal Last
+  Export in Finder* (⇧⌘R) / *Share Last Export…* in the File menu, act on the same file. A bounce or
+  export that finishes **while the app is not frontmost** also posts a banner; one that finishes in
+  front of the user does not, the status line being enough. See §2.8 for the two `[mac]` files.
 - **Undo/redo**, 30 deep, with gesture debouncing for slider drags.
 
 ### 1.7 Timeline
@@ -354,9 +360,14 @@ Everything platform-specific sits behind `#if os(...)` so the same `Sources/` co
   `Views_iOS.swift` are `#if os(iOS)`. The shared view *primitives* (`ArcKnob`, `TrackFader`,
   `TempoControl`, `VerticalMeter`, `DotGridBackground`, `RetroButtonStyle`) stay unguarded in
   `Views.swift` and are reused by both UIs.
+- **`ExportActions` + `Notifications`** (`ExportActions.swift`, `Notifications.swift`, both `[mac]`)
+  — the two things the app can do *after* a file exists: `ExportActions.reveal` / `.share` are the
+  `NSWorkspace` and `NSSharingServicePicker` calls, and `Notifications.completion` posts a banner
+  for a finished bounce or export **only when the app is not frontmost**. Neither has an iOS
+  counterpart that fits, so both files are `#if os(macOS)` outright rather than guarded inside.
 - **Deferred on iPad** (guarded macOS features that degrade to a status no-op): trim / split /
-  duplicate, project save/load, export, mixdown, and output-device selection (iOS exposes no such
-  API).
+  duplicate, project save/load, export, mixdown, output-device selection (iOS exposes no such API),
+  and reveal / share / completion notifications.
 
 ---
 
@@ -397,16 +408,16 @@ Nothing outside `Sources/` is a build input — all three synchronized groups ar
 
 ## 4. File map
 
-29 files. `[shared]` compiles on both platforms; `[mac]`/`[iOS]` are guarded.
+31 files. `[shared]` compiles on both platforms; `[mac]`/`[iOS]` are guarded.
 
 | File | Lines | Platform | Responsibility |
 |------|------:|----------|----------------|
-| `Views.swift` | 2840 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
-| `TransportController.swift` | 1269 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
+| `Views.swift` | 2916 | shared primitives + `[mac]` screens | macOS SwiftUI views _and_ the shared view primitives |
+| `TransportController.swift` | 1287 | shared | Playback, seek, undo/redo, clip editing & selection, mixdown |
 | `EffectsKernels.swift` | 763 | shared | Custom DSP kernels |
-| `App.swift` | 668 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, menus, `AppDelegate` |
+| `App.swift` | 685 | `[mac]` | macOS entry, `ContentView`, keyboard monitor, menus, `AppDelegate` |
 | `Views_iOS.swift` | 532 | `[iOS]` | iPad UI (top bar, track grid, monitor, transport, FX sheet) |
-| `AudioManager.swift` | 516 | shared | The `ObservableObject` facade: published state + forwarders |
+| `AudioManager.swift` | 526 | shared | The `ObservableObject` facade: published state + forwarders |
 | `EffectsCore.swift` | 501 | shared | Module/registry/chain/AU-host core + Apple module defs |
 | `ProjectController.swift` | 375 | shared (`[mac]` panels) | `.xyproj` save/load |
 | `EngineController.swift` | 350 | shared | `AVAudioEngine` graph spine + async kernel insert |
@@ -424,6 +435,8 @@ Nothing outside `Sources/` is a build input — all three synchronized groups ar
 | `Support.swift` | 97 | shared | `UnfairLock`, `computePeaks`, unique filename stems, off-main helper |
 | `DeviceIO_macOS.swift` | 87 | `[mac]` | `CoreAudioDeviceProvider` |
 | `SaveLocation.swift` | 76 | `[mac]` | Sandboxed save-folder: security-scoped bookmark round-trip, first-run prompt state |
+| `ExportActions.swift` | 76 | `[mac]` | Reveal in Finder and the share picker, on the last file the app wrote |
+| `Notifications.swift` | 69 | `[mac]` | The "job finished while you were away" banner, and the frontmost guard that rations it |
 | `Theme.swift` | 65 | shared | Palette + layout constants (drawer widths, control-column width) |
 | `ProjectRecents.swift` | 52 | `[mac]` | File ▸ Open Recent, on `NSDocumentController`; the only place it is written |
 | `AudioDeviceProviding.swift` | 47 | shared | The device-I/O protocol + `DeviceChange` |
@@ -431,12 +444,15 @@ Nothing outside `Sources/` is a build input — all three synchronized groups ar
 | `LiveState.swift` | 45 | shared | 60 Hz display state: the `MeterState` / `TrackMeterState` / `PlayheadState` publishers kept out of `@Published` |
 | `App_iOS.swift` | 16 | `[iOS]` | iPad `@main` entry |
 
-**This table had drifted.** It still read "25 files" and carried the line counts from before §9
-began, with `Views.swift` at 2529, `App.swift` at 273, and none of `SettingsView.swift`,
-`Preferences.swift`, `AboutPanel.swift` or `ProjectRecents.swift` present at all — the four files
-§9 stages 2, 3 and 5 added. Every count above was recomputed from the tree during Stage 8 rather
-than carried forward, since a file map whose whole purpose is being current is worse than no map
-when it is wrong.
+**This table had drifted, and it drifts easily.** Before Stage 8 it still read "25 files" and
+carried the line counts from before §9 began, with `Views.swift` at 2529, `App.swift` at 273, and
+none of `SettingsView.swift`, `Preferences.swift`, `AboutPanel.swift` or `ProjectRecents.swift`
+present at all — the four files §9 stages 2, 3 and 5 added. Every count was recomputed from the tree
+during Stage 8 rather than carried forward, and **recomputed again after Stage 9**, which added
+`ExportActions.swift` and `Notifications.swift` and grew `Views.swift` past 2900. A file map whose
+whole purpose is being current is worse than no map when it is wrong, so the rule is that the last
+stage to touch `Sources/` recomputes the whole table — `wc -l Sources/*.swift`, not arithmetic from
+the previous counts.
 
 ---
 

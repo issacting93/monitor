@@ -906,10 +906,11 @@ No menus. No Settings scene. No About. No document-open handling. No dirty indic
 
 ### 9.0.1 Status — updated 2026-10-13
 
-Eight of the nine stages have landed, in the recommended order's first eight positions. The audit
-block above and §9.6 are the **original 2026-10-12 snapshot** and are left in place as the record of
-what the gap was; §9.6 carries a status column showing what has since changed, and the line numbers
-there have been re-resolved.
+**All nine stages have landed**, in the recommended order and in that order's last position. The
+audit block above and §9.6 are the **original 2026-10-12 snapshot** and are left in place as the
+record of what the gap was; §9.6 carries a status column showing what has since changed, and the
+line numbers there have been re-resolved rather than adjusted — most recently after Stage 9, which
+moved every `Views.swift` and `App.swift` anchor in it one last time.
 
 | Stage | Status | Commits |
 |---|---|---|
@@ -921,7 +922,7 @@ there have been re-resolved.
 | 5 — documents, recents, UTI, plist | ✅ landed | `b7537cb` (open event, Open Recent) · `48eb2b7` (bundle id, plists) |
 | 7 — accessibility | ✅ landed | `7488c3b` (Reduce Motion) · `1717507` (never colour alone) · `fa3e053` (labels, values, adjustable actions) |
 | 8 — tooltips, empty states, progress | ✅ landed | `481e2ac` (tooltips) · `521f667` (empty states, drop target) · `ad8979b` (progress) |
-| 9 — Reveal, Share, notifications | not started | |
+| 9 — Reveal, Share, notifications | ✅ landed | `27c1bee` (Reveal) · `e207b51` (Share) · `1f525f6` (notifications) · `288f394` (drag-out) |
 
 Three things landed that this section did not plan, two of them found against the built app rather
 than by reading it. All three are recorded in §9.1.1: a pair of **device-selection defects** where
@@ -1496,7 +1497,7 @@ state and that dropping still imports exactly as it did; that the empty-project 
 an empty, idle, unmonitored project and that *Monitor the Input* dismisses it; and that the mixdown
 bar advances smoothly rather than in jumps, which the ~15 Hz throttle bounds by construction.
 
-### Stage 9 — Reveal in Finder, Share, and completion notifications
+### Stage 9 — Reveal in Finder, Share, and completion notifications — ✅ LANDED
 
 **Problem.** After an export or bounce, the app says "Exported …" and the file is somewhere the user
 has to go and find. There is no Share, and a long bounce finishing while the user is in another app
@@ -1513,7 +1514,87 @@ nowhere; the only drag-and-drop in the app is *inbound* (`.onDrop`, `Views.swift
 produced and cannot be dragged to Finder or into a DAW — the standard way a Mac user moves audio out
 of an app. The exported file and the exported clip both want an `NSItemProvider`.
 
-### 9.1.1 Found and fixed while executing this section
+#### What landed
+
+`27c1bee` (Reveal in Finder), `e207b51` (Share), `1f525f6` (completion notifications), `288f394`
+(drag-out). Two new `[mac]` files, `ExportActions.swift` (76 lines) and `Notifications.swift` (69).
+
+**The thing the whole stage is built around: the last file written is remembered, not the last
+selection.** Before any of this, an export ended in a status string — "Exported → TRK03_….wav" — and
+the string was overwritten by the next action. Reveal and Share both need a *file*, and by the time
+one exists the save panel has closed and nothing on screen names it. So the stage starts with
+`@Published var lastExportURL: URL?` (`AudioManager.swift:119`), set by both output paths — the
+export's completion (`TransportController.swift:983`) and the mixdown's inner write (`:1214`) —
+because from the user's side those are the same event: a WAV appeared somewhere. Everything else in
+the stage acts on that one property.
+
+**Reveal — landed, but as the file chip rather than the button this section implied.** `27c1bee` put
+a REVEAL button in the top bar beside the status. `288f394` replaced it with the file itself as a
+chip: `Image(systemName: "waveform")` + the filename, click to reveal, **drag to move**
+(`Views.swift:429`–`:450`). That is a deliberate supersession, because the two halves of this
+finding are the same finding: a button that shows you where a file is, sitting next to a file you
+cannot pick up, is worse than the file being pickable-uppable. One control, two gestures, the same
+object. `NSWorkspace.shared.activateFileViewerSelecting` rather than opening the containing folder —
+an export lands in a folder full of takes, and "here is the folder" is not an answer to "where did
+that go" (`ExportActions.swift:25`).
+
+**Share — landed, with the anchor problem solved rather than dodged.** `NSSharingServicePicker` needs
+a real `NSView` and a rect inside it; SwiftUI has no equivalent that takes a file URL and pops the
+same menu. `ShareAnchor` (`ExportActions.swift:55`) is a bare, never-hit-tested `NSViewRepresentable`
+whose only job is to exist in the window behind the SHARE button, so the popover points at the
+control that opened it. It is driven by a binding rather than a closure so the button stays a plain
+`Button`, and it clears the binding **before** calling `show` — `show` runs its own event loop and
+does not return until the picker is dismissed, so clearing afterwards would leave the binding set the
+whole time the menu is open and a second press would try to open it again. The File-menu item has no
+view to point at and falls back to the key window's content view (`:39`).
+
+**Drag-out — two sites, and the take's gesture had to change for it to work at all.** The export chip
+above, and the take in a lane: `.onDrag { NSItemProvider(contentsOf: clip.url) ?? NSItemProvider() }`
+(`Views.swift:787`), carrying the clip's **own file**, so what lands in Finder or a DAW is the take as
+recorded and not a re-encode. That required swapping the take's `DragGesture(minimumDistance: 0)` for
+`.onTapGesture` (`:779`): a zero-distance drag gesture claims every press, so `.onDrag` could never
+have started, and the gesture's value was discarded anyway — the "split point a later change needs"
+its old comment promised was never read. Selection is unchanged in effect; the comment in the source
+records the swap. Both sites use `?? NSItemProvider()`, because `contentsOf:` returns nil for a URL
+it cannot read and an empty provider still starts the gesture, where returning nil would silently
+kill it.
+
+**Notifications — the guard is the feature.** `Notifications.completion` (`Notifications.swift:33`)
+returns immediately when `NSApp.isActive`, so the banner exists **only** for a job that finished while
+the user was in another app. That is §9.5's "restrained" rule written as a guard rather than a
+preference, and it is belt-and-braces besides: with no `UNUserNotificationCenterDelegate` installed
+macOS suppresses banners from a frontmost app anyway, so a mistake here degrades to "nothing happens"
+rather than to a duplicate. Permission is requested at the first completion that would actually be
+posted, never at launch — a system prompt on first run, for a feature most sessions never reach, is
+the other half of the same restraint. The sound is on (`.default`): restraint about *when* to notify
+is not the same as notifying silently. Both completions call it — `TransportController.swift:985` and
+`:1216`, the export and the mixdown.
+
+**The File menu gained both, disabled rather than hidden** (`App.swift:266`–`:279`): *Reveal Last
+Export in Finder* with ⇧⌘R, and *Share Last Export…* with no shortcut at all. Disabled-until-there-is-
+a-file for the same reason Open Recent is: a File menu whose items move around as the app is used is
+harder to aim at than one that is always the same shape. Share has no shortcut and there is none to
+give it — ⇧⌘S is Save As and the obvious letters beside it are taken; the reasoning is in the source.
+
+**Two deviations worth naming.** The take's gesture swap above is one. The other: **iOS was not
+touched**, and correctly so — every one of the four commits is `#if os(macOS)` or in a `[mac]` file.
+`NSSharingServicePicker`, `activateFileViewerSelecting` and `UNUserNotificationCenter` have no iOS
+counterpart that fits, and the section scoped the whole stage to the Mac. `Views_iOS.swift` is
+unchanged by all four commits, as it was by Stage 8's three.
+
+**Verification.** All four gates green on each of the four commits: macOS and iOS typecheck,
+`./package.sh`, `xcodebuild`. That settles compilation and nothing else — and for **all four** commits
+it settles less than usual, because each one is a call into AppKit or UserNotifications whose
+*behaviour* is entirely on the other side of the API boundary. What no gate here can settle,
+and what the hardware run should check: that clicking the chip opens Finder **with the file selected**
+(and that the sandbox lets a save-panel URL be revealed without a bookmark); that dragging the chip
+and dragging a take both reach Finder and a DAW as playable files; that a bounce triggered while
+another app is frontmost raises a banner **and that one triggered while the app is frontmost does
+not**; that the permission prompt appears at that first background completion and not at launch; and
+that click-to-select on a take still behaves as it did, now that it is a tap rather than a drag. Two
+of those are the sort of thing that fails quietly rather than loudly — a drag-out that the lane's
+`ScrollView` intercepts, and a notification that an ad-hoc-signed dev build launched from a Downloads
+folder cannot register for at all.
 
 Not in the plan, because none of it was visible by reading — each was reported against the built app.
 
@@ -1565,7 +1646,7 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 | **P2** | 6 — context menus | ✅ done | Depends on 1 |
 | **P3** | 7 — accessibility | ✅ done | Highest effort, cannot be auto-verified |
 | **P3** | 8 — tooltips / empty states / progress | ✅ done | |
-| **P3** | 9 — Reveal / Share / notifications | | |
+| **P3** | 9 — Reveal / Share / notifications | ✅ done | |
 
 **Suggested execution order** differs from priority because of dependencies: **4 → 1 → 6 → 2 → 3 → 5 →
 7 → 8 → 9**. Stage 4 is first because it is small, independent, and the only correctness item;
@@ -1573,11 +1654,12 @@ Stage 5 is late despite being P1 because the bundle-id decision in it may want a
 rather than a rushed one. That is how it turned out: the id was put to the user, and it took one
 question to settle rather than a guess.
 
-**Progress against that order, 2026-10-13:** the first eight have landed, so **Stage 9** is the last.
-Stage 3 was moved ahead of Stage 5 and is done — the licensing obligation it carried has
-been discharged, and discharged in the app rather than in the repository, which is where MIT wanted
-it. Stage 8 landed short of its own spec in three places and in full in one; see "What landed" under
-it, which is where the deviations are recorded rather than here.
+**Progress against that order, 2026-10-13: all nine have landed, in the order above.** Stage 3 was
+moved ahead of Stage 5 and is done — the licensing obligation it carried has been discharged, and
+discharged in the app rather than in the repository, which is where MIT wanted it. Stage 8 landed
+short of its own spec in three places and in full in one; Stage 9 landed in full but with one
+finding answered from the other side of itself. See "What landed" under each, which is where the
+deviations are recorded rather than here.
 
 **Stage 7 carries a verification debt that no later stage discharges.** It is the one stage in this
 section whose four gates prove nothing about whether the work functions: the labels have never been
@@ -1587,6 +1669,16 @@ it.** Its four gates are equally silent on all three of its subjects — a toolt
 source and never appears on hover, a `ContentUnavailableView` whose condition never fires, and a
 progress bar that jumps in fifths because the throttle is the only thing between it and the render
 loop all compile identically to the working version.
+
+**Stage 9 adds a third kind of debt, and it is the largest.** Stages 7 and 8 are silent because their
+work only becomes visible under a condition; Stage 9's work calls *out of the process* — Finder, the
+share picker, the notification centre — through four AppKit and UserNotifications entry points whose
+contracts are all on the far side of the API. A typecheck proves the call is spelled correctly and
+nothing whatever about whether it did anything. It is also the first stage in this section where a
+runtime failure is **silent by construction**: a notification suppressed by a missing authorization,
+a drag the lane's `ScrollView` swallows, and a reveal blocked by the sandbox all look exactly like
+the code not being there. Every check Stage 9 needs is in its "What landed", and none of them is
+optional.
 
 ## 9.4 Verification
 
@@ -1646,6 +1738,18 @@ property of a loop that no typecheck evaluates. The one thing this section's gat
 Stage 8 is the absence of a regression in what was already there, and the one thing they can be made
 to settle cheaply is the tooltip count, by grepping the source rather than the binary — which is the
 method §9.4's `strings` correction already prescribes.
+
+**Stage 9 leaves the process, and that is a different limit from Stage 7's or Stage 8's.** Four calls
+— `activateFileViewerSelecting`, `NSSharingServicePicker.show`, `UNUserNotificationCenter.add`, and
+`.onDrag`'s provider — all compile identically to their working and broken versions, because the
+thing that decides whether they work is on the other side of an API boundary: the sandbox's view of a
+save-panel URL, the picker's own event loop, the notification authorization, and whether the lane's
+`ScrollView` intercepts the drag first. Three of those four fail *silently* — no banner, no gesture,
+no Finder window — so the failure mode is indistinguishable from the feature not existing. The one
+piece of Stage 9 that a gate can be made to settle cheaply is that the two output paths both set
+`lastExportURL`: `grep -n "lastExportURL = " Sources/TransportController.swift` should print exactly
+two lines, and if a future change adds a third output path without one, that grep is what catches it.
+Beyond that, the stage is verified by using it — see its "What landed" for the list.
 
 ## 9.5 Platform rules applied
 
@@ -1789,23 +1893,25 @@ computed from the current file rather than adjusted by hand, and the same pass c
 that point, because nothing in those stages touched that file; **Stage 7 changed that.** Its three
 commits added roughly 260 lines to `Views.swift` and 60 to `Views_iOS.swift`, so every `Views.swift`
 anchor in this table was recomputed against the current tree — rows 18 and 19, item 13's `onDrop`,
-and item 34's `ProgressView` all moved. `Views_iOS.swift` anchors: the only one still standing is
+and item 34's `ProgressView` all moved. **Stage 9 moved them a third time** — it added 17 lines to
+`App.swift` and about 200 to `Views.swift` — so the table below is current as of Stage 9 and the two
+paragraphs that follow it carry the numbers Stage 8 left. `Views_iOS.swift` anchors: the only one still standing is
 row 8's `.toolbar` at `Views_iOS.swift:376`, which is now `:437`.
 
 | # | Item | Was | Now | Where |
 |---|---|---|---|---|
-| 3 | `.commands` / `CommandGroup` / `CommandMenu` | ABSENT | **PRESENT** — `.commands` plus five groups | `App.swift:567`; groups at `:222` File, `:268` Edit, `:278` Transport, `:316` Track, `:364` View |
-| 4 | File ▸ New/Open/Save items | ABSENT | **PRESENT — 6 items, one gap** | `App.swift:222-262`. No *New Project*; Open Recent added by Stage 5 (`:238`) |
-| 5 | `WindowGroup` sizing | PARTIAL | **PRESENT** | `.defaultSize(width: 1440, height: 900)` at `App.swift:566` |
-| 6 | Window frame autosave | ABSENT | **PRESENT** | `setFrameAutosaveName` at `App.swift:418` |
-| 7 | `NSApplicationDelegate` methods | ONE | **THREE** | `:600` `application(_:open:)` · `:625` terminate-after-close · `:635` `applicationShouldTerminate` |
-| 10 | Unsaved-changes guard on quit | ABSENT | **PRESENT** — Save / Cancel / Don't Save sheet | `App.swift:635-666` |
-| 12 | Window title / represented URL / edited dot | ABSENT | **PRESENT** | `App.swift:412-414`, `:500` |
-| 18 | Context menus | ABSENT (0) | **PRESENT — 3** | take `Views.swift:716` · track header `:950` · transport `:1890` |
-| 19 | Tooltips (`.help`) | 2 | **PRESENT — 35** | `Views.swift:273`–`:1986` |
+| 3 | `.commands` / `CommandGroup` / `CommandMenu` | ABSENT | **PRESENT** — `.commands` plus five groups | `App.swift:584`; groups at `:222` File, `:285` Edit, `:295` Transport, `:333` Track, `:381` View |
+| 4 | File ▸ New/Open/Save items | ABSENT | **PRESENT — 6 items, one gap** | `App.swift:222`–`:284`. No *New Project*; Open Recent added by Stage 5 (`:238`) |
+| 5 | `WindowGroup` sizing | PARTIAL | **PRESENT** | `.defaultSize(width: 1440, height: 900)` at `App.swift:583` |
+| 6 | Window frame autosave | ABSENT | **PRESENT** | `setFrameAutosaveName` at `App.swift:435` |
+| 7 | `NSApplicationDelegate` methods | ONE | **THREE** | `:617` `application(_:open:)` · `:642` terminate-after-close · `:652` `applicationShouldTerminate` |
+| 10 | Unsaved-changes guard on quit | ABSENT | **PRESENT** — Save / Cancel / Don't Save sheet | `App.swift:652`–`:683` |
+| 12 | Window title / represented URL / edited dot | ABSENT | **PRESENT** | `App.swift:414`, `:430`–`:431`, `:517` |
+| 18 | Context menus | ABSENT (0) | **PRESENT — 3** | take `Views.swift:792` · track header `:1026` · transport `:1966` |
+| 19 | Tooltips (`.help`) | 2 | **PRESENT — 35 at Stage 8, 38 after Stage 9** | `Views.swift:273`–`:2062` |
 | 20 | Keyboard shortcuts | 20 bindings, all invisible | **split in two** | see below |
 | 24 | Focus / keyboard navigation | ABSENT — Tab repurposed | **unchanged** — Tab is still a monitor binding | `App.swift:110` |
-| 25 | Escape handling | ABSENT | **PRESENT** | `.onExitCommand` at `App.swift:509` |
+| 25 | Escape handling | ABSENT | **PRESENT** | `.onExitCommand` at `App.swift:526` |
 
 **Item 20 has changed shape, and the binding table above is now wrong.** `3e35349` moved every
 **⌘-modified** binding out of the monitor and into the menu bar, where it carries a real
@@ -1817,18 +1923,20 @@ field. So the table's rows for ⌘Z, ⌘S, ⌘O, ⌘E, ⌘T, ⌘D, ⌘1–⌘8 a
 bar**, not the monitor, and its line numbers are all stale. **Delete is new and absent from that
 table entirely.**
 
-**Moved since:** item 1 (Settings scene) is **PRESENT** — `Settings {` at `App.swift:576`, the gear
-as a `SettingsLink` at `Views.swift:468`, and the scene supplies both the app-menu item and ⌘, with
+**Moved since:** item 1 (Settings scene) is **PRESENT** — `Settings {` at `App.swift:593`, the gear
+as a `SettingsLink` at `Views.swift:532`, and the scene supplies both the app-menu item and ⌘, with
 no `keyboardShortcut` written anywhere. Item 2 (About panel) is **PRESENT** — `AboutPanel.show()` from
 `CommandGroup(replacing: .appInfo)` at `App.swift:207`, Help replaced at `:215`, and the ported DSP's
 full MIT notice carried in the panel's credits. Item 9 (Open Recent) is **PRESENT** — a submenu inside
 the File group at `App.swift:238`, on `NSDocumentController` through `Sources/ProjectRecents.swift`,
-with the open event that makes its entries mean something handled at `App.swift:600`. Item 4's second
+with the open event that makes its entries mean something handled at `App.swift:617`. Item 4's second
 gap is closed, so File's remaining gap is *New Project* alone.
 
 **Items 26–29 are now PRESENT, and this is the largest single change since the snapshot.** The
 count went from `grep -rn "accessibility" Sources/*.swift | wc -l` → **0** to **129** (95 in
-`Views.swift`, 34 in `Views_iOS.swift`). Row 26 and 27: every icon-only or shape-only control has a
+`Views.swift`, 34 in `Views_iOS.swift`), and **140 after Stage 9** (106 in `Views.swift`, unchanged
+in `Views_iOS.swift`) — the chip and the SHARE button account for most of the difference, since both
+are new controls that needed a label, a hint and, for the chip, an action. Row 26 and 27: every icon-only or shape-only control has a
 label and, where it has a state, a value — and `accessibilityElement(children:)` appears at eight
 sites, `.ignore` where `.combine` would read the same fact twice and plain `.accessibilityElement()`
 on the bare drag targets. Row 28: `@Environment(\.accessibilityReduceMotion)` in `LoopGridView`,
@@ -1837,24 +1945,42 @@ on the bare drag targets. Row 28: `@Environment(\.accessibilityReduceMotion)` in
 dot a glyph change. See "What landed" under Stage 7 for the two deviations — no drawer slide existed
 to gate, and Increase Contrast was deliberately not attempted.
 
-**Item 19 moved from 2 to 35 in Stage 8, and item 34 is no longer indeterminate.** The tooltip
-count is now `grep -c '\.help(' Sources/Views.swift` → **35**, spread across `TempoControl`,
+**Item 19 moved from 2 to 35 in Stage 8, and item 34 is no longer indeterminate.** At that point the
+tooltip count was `grep -c '\.help(' Sources/Views.swift` → **35**, spread across `TempoControl`,
 `TrackControlsView`, the zoom pair, the grid header, `SideEffectsPanelView` and `TransportBar`;
 nothing in `Views_iOS.swift` gained one, which is correct for a pointer-less platform. Item 34's
-single indeterminate `ProgressView` is now three call sites — a determinate bar in the MIXDOWN
-button (`Views.swift:1851`) fed by the mixdown's mix pass, and an indeterminate spinner as the
-fallback in both it (`:1854`) and the top bar's new `busyIndicator` (`:494`). Item 13's `onDrop` is
-at `Views.swift:795`, and it is no longer bare: the lane it belongs to tracks `isTargeted` and draws
-a drop state (§9.1 Stage 8). **Item 13 is still ABSENT as written** — there is still no drag *out*,
-which is Stage 9's.
+single indeterminate `ProgressView` became four call sites — a determinate bar in the MIXDOWN
+button (`Views.swift:1851` at the time, `:1927` now) fed by the mixdown's mix pass, and an
+indeterminate spinner as the fallback in both it (`:1927`/`:1930`) and the top bar's new
+`busyIndicator` (`:554`, used at `:405`). Item 13's `onDrop` was at `Views.swift:795` when this went
+in and is at `:871` now, and it is no longer bare: the lane it belongs to tracks `isTargeted` and
+draws a drop state (§9.1 Stage 8). **Item 13 was still ABSENT as written when that paragraph went
+in** — there was still no drag *out*, which is Stage 9's, and Stage 9 has now landed it.
 
-**Still ABSENT, verified again 2026-10-13:** items
-11 (autosave / crash recovery), 13 (drag **out** — one `onDrop` at
-`Views.swift:795`; the `onDragStart`/`onDragEnd` at `Views.swift:209-236` are a *fader's* undo-gesture
-closures, not SwiftUI `.onDrag`, so a grep for "onDrag" is misleading here), 14, 15, 16, 17, 21, 22,
-23, 30–33 and 35. `grep -rn "onHover" Sources/` still returns nothing: Stage 8 answered the drag
-half of its own "no hover affordances" note and left the pointer half alone, deliberately — see
-"What landed" under Stage 8.
+**Stage 9 closed items 13, 14, 15 and 35, and every `Views.swift` anchor above moved again.** The
+four commits added ~200 lines to `Views.swift`, so the numbers in the two paragraphs above are as of
+Stage 8 and no longer current; what follows is computed from the tree as it stands. Item 13 (drag
+**out**) is **PRESENT at two sites** — the export chip at `Views.swift:444` and a take at `:787`,
+both `NSItemProvider(contentsOf:)`. The `onDragStart`/`onDragEnd` at `Views.swift:209`–`:236` are
+*still* a fader's undo-gesture closures rather than SwiftUI `.onDrag`, so a bare `grep -rn "onDrag"`
+still mixes the two and now finds four lines, of which two are the real thing. Item 14 (Reveal) and
+item 15 (Share) are **PRESENT** — `ExportActions.reveal` / `.share` in `Sources/ExportActions.swift`
+(76 lines, `[mac]`), reached from the top bar (`Views.swift:443`, `:454`) and the File menu
+(`App.swift:266`, `:276`). Item 35 (completion notifications) is **PRESENT** —
+`Sources/Notifications.swift` (69 lines, `[mac]`), called from both completions
+(`TransportController.swift:985`, `:1216`). Item 19's count is now `grep -c '\.help(' Sources/Views.swift`
+→ **38**: Stage 8's 35, plus one each on the chip (`:450`), the SHARE button (`:461`) and a take
+(`:788`). Item 34's `ProgressView` call sites moved to `Views.swift:558`, `:562`, `:1927` and `:1930`
+— still two determinate bars and two spinners, no third site added. `busyIndicator` is at `:554`, used
+at `:405`. Item 13's `onDrop` is at `Views.swift:871` and its lane's help at `:870`, from `laneHelp`
+at `:664`.
+
+**Still ABSENT, verified again 2026-10-13 after Stage 9:** items
+11 (autosave / crash recovery), 16 (Quick Look, blocked by space=play — §9.2), 17 (Services), 21
+(pinch-to-zoom), 22 (hover), 23 (multi-select / copy-paste), 30–33, and item 24 (focus / keyboard
+navigation — Tab is still a monitor binding at `App.swift:110`). `grep -rn "onHover" Sources/` still
+returns nothing: Stage 8 answered the drag half of its own "no hover affordances" note and left the
+pointer half alone, deliberately — see "What landed" under Stage 8 — and Stage 9 did not revisit it.
 
 **Item 29 was also half wrong, and the correction is recorded rather than quietly dropped.** The
 snapshot called mute/solo and track identity "colour-only". Mute and solo are not: `RetroButtonStyle`
