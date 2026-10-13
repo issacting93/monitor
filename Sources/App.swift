@@ -211,7 +211,10 @@ struct Tape08Commands: Commands {
 
             Divider()
 
-            Button("Return to Start") { audio.stopAll() }
+            // `stopAll` already returns to the start, so wiring this to it made the
+            // item a second Stop under a different name. Seeking is what the label
+            // promises: the playhead goes back to the top and playback carries on.
+            Button("Return to Start") { audio.seek(toFraction: 0) }
 
             Toggle("Metronome", isOn: $audio.metronomeEnabled)
             Button("Tap Tempo") { audio.tapTempo() }
