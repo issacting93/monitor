@@ -906,7 +906,7 @@ No menus. No Settings scene. No About. No document-open handling. No dirty indic
 
 ### 9.0.1 Status — updated 2026-10-13
 
-Six of the nine stages have landed, in the recommended order's first six positions. The audit
+Seven of the nine stages have landed, in the recommended order's first seven positions. The audit
 block above and §9.6 are the **original 2026-10-12 snapshot** and are left in place as the record of
 what the gap was; §9.6 carries a status column showing what has since changed, and the line numbers
 there have been re-resolved.
@@ -919,7 +919,7 @@ there have been re-resolved.
 | 2 — Settings scene | ✅ landed | `6f8e503` (menu metronome) · `de99668` (the window) · `d0de50b` (preferences) · `d3af3a1` (devices) |
 | 3 — About, Help, `CREDITS.md` | ✅ landed | `fb98d7b` |
 | 5 — documents, recents, UTI, plist | ✅ landed | `b7537cb` (open event, Open Recent) · `48eb2b7` (bundle id, plists) |
-| 7 — accessibility | not started | |
+| 7 — accessibility | ✅ landed | `7488c3b` (Reduce Motion) · `1717507` (never colour alone) · `fa3e053` (labels, values, adjustable actions) |
 | 8 — tooltips, empty states, progress | not started | |
 | 9 — Reveal, Share, notifications | not started | |
 
@@ -1316,7 +1316,7 @@ reverse of what the ASCII names BS/DEL suggest, so do not "correct" it.
 The monitor hands back every event it does not claim, and a focused text field has first call on
 Escape; a raw `NSEvent` branch would cancel a trim out from under a field the user is typing in.
 
-### Stage 7 — Accessibility
+### Stage 7 — Accessibility — ✅ LANDED
 
 **Problem.** The app is entirely custom-drawn. Every control in §9.6's audit is a `Button` with a
 drawn shape and no `accessibilityLabel`, so VoiceOver announces them as unlabelled buttons; mute,
@@ -1336,16 +1336,73 @@ This is the stage where a green typecheck proves the least — it needs VoiceOve
 Inspector, which are **hardware-free** but cannot be automated here, so it joins §8.6 as a manual
 check.
 
+#### What landed
+
+`7488c3b` (pass 3), `1717507` (pass 2), `fa3e053` (pass 1).
+
+**Pass 3 — Reduce Motion.** `LoopGridView`, `PlayheadScrollFollower` and `ReelView` take
+`@Environment(\.accessibilityReduceMotion)`:
+- The play-start scroll and the follow scroll jump rather than glide when the setting is on. These
+  are the only movements that can cross the whole grid in one step, which is exactly what the
+  setting exists to suppress.
+- The reel's `repeatForever` rotation is dropped outright, not slowed — it is the one thing on the
+  screen that never stops while audio plays.
+- The 3 % press scale in `RetroButtonStyle` and the 60 ms colour fades are **deliberately left
+  alone**. They are an order of magnitude below what the setting is for, and suppressing them would
+  make the controls feel dead rather than calm. Both are commented in place.
+
+**Deviation from this section's list: there is no drawer slide to gate.** The list named one, but
+`App.swift:483-487` swaps padding and inserts `SideEffectsPanelView` with no `withAnimation` and no
+`.transition` — the drawer already appears instantly. Nothing was invented to give the setting
+something to switch off.
+
+**Pass 2 — never colour alone.** The claim in §9.6 item 29 turned out to be **half wrong**, and the
+correction matters: `RetroButtonStyle` and `IconToggle` invert *both* fill and border when active,
+which is a large luminance difference that greyscale preserves. Mute and solo were therefore not
+purely colour. What passed was a smaller, real defect, and one genuinely colour-only case was found
+elsewhere:
+- macOS and iOS mute now draw the `M` **struck through**; solo underlines the `S`. These are second,
+  text-level differences on top of the existing inversion — not the only signal, but the one that
+  survives an adjustment that washes the fill out.
+- The iOS record dot drew `circle.fill` in both states, so its state *was* carried by tint alone. It
+  now switches glyph: hollow when idle, solid when recording.
+
+**Pass 1 — labels.** `grep -rn accessibility Sources/*.swift` returned **0** before this, so it is
+the app's first accessibility work rather than a correction. Icon-only controls gained a label, a
+value where they have a state, and an `isSelected` trait on the toggles. `ArcKnob`, `TrackFader`,
+the timeline ruler and the trim editor's two invisible 30 pt handles gained
+`accessibilityAdjustableAction` — they were bare drag targets with no focusable control and no
+keyboard affordance at all. The eight track headers (macOS) and eight iOS rows gained a spoken
+value, because "01"…"08" was otherwise the whole story. Decoration is hidden rather than labelled:
+the reels, the header glyph, the level meters, the waveform lanes, and the numeric readouts that sit
+beside a control already speaking the same number.
+
+**Increase Contrast was deliberately not implemented.** §9.6's honest note proposed responding to
+it alongside Reduce Motion. It is not: `Theme` (`Theme.swift:9-65`) is a plain enum of `static let`
+colours with no environment, so nothing downstream can react to `colorSchemeContrast`; and the
+obvious lever — an `@Environment` inside `RetroButtonStyle` — sits on a `ButtonStyle` rather than a
+`View`, where dynamic-property support is undocumented, so it could silently do nothing and no gate
+in §9.4 would say so. Making the palette environment-driven is a real change to `Theme` and belongs
+in its own stage, not bolted onto this one.
+
+**Verification.** All four gates green on each of the three commits: macOS and iOS typecheck,
+`./package.sh`, `xcodebuild`. **That settles compilation and nothing else.** Per §9.4 this stage
+cannot be verified by any gate here; it needs VoiceOver and the Accessibility Inspector by hand.
+Specifically unsettled, and worth checking first in that pass: whether `accessibilityAdjustableAction`
+is reachable at all on these custom views, and whether `.accessibilityElement()` on the ruler and the
+trim handles exposes them — an element that is silently dropped from the tree looks identical to a
+working one from the compiler's side.
+
 ### Stage 8 — Tooltips, empty states, and progress
 
-**Problem.** Exactly **two** `.help(...)` calls exist in the whole app (`Views.swift:877`, `:1544`),
+**Problem.** Exactly **two** `.help(...)` calls exist in the whole app (`Views.swift:1126`, `:1861`),
 so the small custom controls explain themselves only by shape. An empty track and an empty project
 look the same as a broken one. Long operations (bounce, export, project save) show a text status and
-no determinate progress — the app's only `ProgressView` is indeterminate (`Views.swift:1462`) — so a
+no determinate progress — the app's only `ProgressView` is indeterminate (`Views.swift:1754`) — so a
 30-second mixdown is indistinguishable from a hang.
 
 Also here: **no hover affordances.** `grep -rn "onHover" Sources/` returns nothing, so clips that are
-drop targets (`.onDrop`, `Views.swift:614`) and lanes that respond to the pointer give no feedback
+drop targets (`.onDrop`, `Views.swift:735`) and lanes that respond to the pointer give no feedback
 that they are interactive.
 
 **Change.** `.help()` on the transport, track-header, chain-editor and zoom controls. A
@@ -1419,7 +1476,7 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 | **P2** | 2 — Settings scene | ✅ done | Needed before shipping to MAS; ⌘, is expected |
 | **P2** | 3 — About + credits | ✅ done | Contained a licensing obligation |
 | **P2** | 6 — context menus | ✅ done | Depends on 1 |
-| **P3** | 7 — accessibility | | Highest effort, cannot be auto-verified |
+| **P3** | 7 — accessibility | ✅ done | Highest effort, cannot be auto-verified |
 | **P3** | 8 — tooltips / empty states / progress | | |
 | **P3** | 9 — Reveal / Share / notifications | | |
 
@@ -1429,10 +1486,15 @@ Stage 5 is late despite being P1 because the bundle-id decision in it may want a
 rather than a rushed one. That is how it turned out: the id was put to the user, and it took one
 question to settle rather than a guess.
 
-**Progress against that order, 2026-10-13:** the first six have landed, so the next is **Stage 7**,
-then **8**. Stage 3 was moved ahead of Stage 5 and is done — the licensing obligation it carried has
+**Progress against that order, 2026-10-13:** the first seven have landed, so the next is **Stage 8**,
+then **9**. Stage 3 was moved ahead of Stage 5 and is done — the licensing obligation it carried has
 been discharged, and discharged in the app rather than in the repository, which is where MIT wanted
 it.
+
+**Stage 7 carries a verification debt that no later stage discharges.** It is the one stage in this
+section whose four gates prove nothing about whether the work functions: the labels have never been
+heard, and the adjustable actions have never been reached. It needs a VoiceOver and Accessibility
+Inspector pass, and that pass has not happened.
 
 ## 9.4 Verification
 
@@ -1622,8 +1684,12 @@ to be re-resolved but carried the 2026-10-12 numbers: at `3722ee7` the File grou
 `:190`, and `.commands` at `:525`, not `:487`. Every App.swift number in this table has now been
 computed from the current file rather than adjusted by hand, and the same pass caught that the
 "Moved since" paragraph's `:191` for the About group was off by one and its `:215` for Help was the
-*current* value rather than the one it was written against. `Views.swift` numbers are unaffected —
-nothing in these stages touched that file.
+*current* value rather than the one it was written against. `Views.swift` numbers were unaffected at
+that point, because nothing in those stages touched that file; **Stage 7 changed that.** Its three
+commits added roughly 260 lines to `Views.swift` and 60 to `Views_iOS.swift`, so every `Views.swift`
+anchor in this table was recomputed against the current tree — rows 18 and 19, item 13's `onDrop`,
+and item 34's `ProgressView` all moved. `Views_iOS.swift` anchors: the only one still standing is
+row 8's `.toolbar` at `Views_iOS.swift:376`, which is now `:437`.
 
 | # | Item | Was | Now | Where |
 |---|---|---|---|---|
@@ -1634,8 +1700,8 @@ nothing in these stages touched that file.
 | 7 | `NSApplicationDelegate` methods | ONE | **THREE** | `:600` `application(_:open:)` · `:625` terminate-after-close · `:635` `applicationShouldTerminate` |
 | 10 | Unsaved-changes guard on quit | ABSENT | **PRESENT** — Save / Cancel / Don't Save sheet | `App.swift:635-666` |
 | 12 | Window title / represented URL / edited dot | ABSENT | **PRESENT** | `App.swift:412-414`, `:500` |
-| 18 | Context menus | ABSENT (0) | **PRESENT — 3** | take `Views.swift:599` · track header `:773` · transport `:1590` |
-| 19 | Tooltips (`.help`) | 2 | **still 2**, lines drifted | `Views.swift:980`, `:1661` |
+| 18 | Context menus | ABSENT (0) | **PRESENT — 3** | take `Views.swift:666` · track header `:882` · transport `:1788` |
+| 19 | Tooltips (`.help`) | 2 | **still 2**, lines drifted | `Views.swift:1126`, `:1861` |
 | 20 | Keyboard shortcuts | 20 bindings, all invisible | **split in two** | see below |
 | 24 | Focus / keyboard navigation | ABSENT — Tab repurposed | **unchanged** — Tab is still a monitor binding | `App.swift:110` |
 | 25 | Escape handling | ABSENT | **PRESENT** | `.onExitCommand` at `App.swift:509` |
@@ -1651,7 +1717,7 @@ bar**, not the monitor, and its line numbers are all stale. **Delete is new and 
 table entirely.**
 
 **Moved since:** item 1 (Settings scene) is **PRESENT** — `Settings {` at `App.swift:576`, the gear
-as a `SettingsLink` at `Views.swift:421`, and the scene supplies both the app-menu item and ⌘, with
+as a `SettingsLink` at `Views.swift:463`, and the scene supplies both the app-menu item and ⌘, with
 no `keyboardShortcut` written anywhere. Item 2 (About panel) is **PRESENT** — `AboutPanel.show()` from
 `CommandGroup(replacing: .appInfo)` at `App.swift:207`, Help replaced at `:215`, and the ported DSP's
 full MIT notice carried in the panel's credits. Item 9 (Open Recent) is **PRESENT** — a submenu inside
@@ -1659,9 +1725,25 @@ the File group at `App.swift:238`, on `NSDocumentController` through `Sources/Pr
 with the open event that makes its entries mean something handled at `App.swift:600`. Item 19 is
 still 2 tooltips. Item 4's second gap is closed, so File's remaining gap is *New Project* alone.
 
+**Items 26–29 are now PRESENT, and this is the largest single change since the snapshot.** The
+count went from `grep -rn "accessibility" Sources/*.swift | wc -l` → **0** to **129** (95 in
+`Views.swift`, 34 in `Views_iOS.swift`). Row 26 and 27: every icon-only or shape-only control has a
+label and, where it has a state, a value — and `accessibilityElement(children:)` appears at eight
+sites, `.ignore` where `.combine` would read the same fact twice and plain `.accessibilityElement()`
+on the bare drag targets. Row 28: `@Environment(\.accessibilityReduceMotion)` in `LoopGridView`,
+`PlayheadScrollFollower` and `ReelView`, gating the two whole-grid scrolls and the reel's
+`repeatForever` rotation. Row 29: mute and solo gained a strike and an underline, and the iOS record
+dot a glyph change. See "What landed" under Stage 7 for the two deviations — no drawer slide existed
+to gate, and Increase Contrast was deliberately not attempted.
+
 **Still ABSENT, verified again 2026-10-13:** items
 11 (autosave / crash recovery), 13 (drag **out** — one `onDrop` at
-`Views.swift:668`; the `onDragStart`/`onDragEnd` at `Views.swift:190-217` are a *fader's* undo-gesture
+`Views.swift:735`; the `onDragStart`/`onDragEnd` at `Views.swift:209-236` are a *fader's* undo-gesture
 closures, not SwiftUI `.onDrag`, so a grep for "onDrag" is misleading here), 14, 15, 16, 17, 21, 22,
-23, 26–29, 30–33 and 35. Item 26–29 in particular: `grep -rn "accessibility" Sources/*.swift | wc -l`
-is **still 0**. Item 34 is still the single indeterminate `ProgressView` (`Views.swift:1565`).
+23, 30–33 and 35. Item 34 is still the single indeterminate `ProgressView` (`Views.swift:1754`).
+
+**Item 29 was also half wrong, and the correction is recorded rather than quietly dropped.** The
+snapshot called mute/solo and track identity "colour-only". Mute and solo are not: `RetroButtonStyle`
+inverts both fill and border when active, a luminance difference greyscale keeps. Track identity
+*is* colour-only — `Theme.trackColor` is the only thing telling eight rows apart — and that is left
+as it is, being the retro-instrument design choice items 30–32's honest note already carves out.
