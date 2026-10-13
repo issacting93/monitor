@@ -417,18 +417,37 @@ struct TopBar: View {
                 // once there is a file — before one exists there is nothing to reveal, and
                 // a permanently greyed control beside the status is one more thing to read
                 // for no reason.
-                //
-                // The filename is in the tooltip rather than printed here: the status
-                // string beside it already names the file at the moment it is written, and
-                // this bar is the tightest row in the app at the 1280 pt minimum.
                 if let exported = audio.lastExportURL {
-                    Button { ExportActions.reveal(exported) } label: {
-                        barActionLabel("REVEAL")
+                    // The file itself, as a chip: click it to reveal, drag it to move it.
+                    //
+                    // This is the affordance the finding asked for from the other side.
+                    // The app produces WAVs — that is most of what it does — and until now
+                    // not one of them could be dragged to Finder or into a DAW, which is
+                    // the standard way a Mac user moves audio between apps. Clicking is
+                    // reveal, so one control answers both "where is it" and "take it
+                    // there", and the two are the same gesture on the same object.
+                    HStack(spacing: 5) {
+                        Image(systemName: "waveform")
+                            .font(.system(size: 9))
+                            .accessibilityHidden(true)
+                        Text(exported.lastPathComponent)
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .frame(maxWidth: 120, alignment: .leading)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("Reveal last export in Finder")
-                    .accessibilityHint("Shows \(exported.lastPathComponent) in a Finder window")
-                    .help("Show \(exported.lastPathComponent) in Finder")
+                    .padding(.horizontal, 7).padding(.vertical, 5)
+                    .foregroundColor(Theme.textPrimary)
+                    .overlay(Rectangle().stroke(Theme.textPrimary.opacity(0.18), lineWidth: 1))
+                    .contentShape(Rectangle())
+                    .onTapGesture { ExportActions.reveal(exported) }
+                    .onDrag { NSItemProvider(contentsOf: exported) ?? NSItemProvider() }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Last export, \(exported.lastPathComponent)")
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint("Shows the file in Finder. Drag it to another app to send it there.")
+                    .accessibilityAction { ExportActions.reveal(exported) }
+                    .help("Click to show \(exported.lastPathComponent) in Finder, or drag it into another app")
 
                     // The anchor sits behind the SHARE button so the picker points at the
                     // control that opened it rather than at the middle of the window.
@@ -745,16 +764,28 @@ struct WaveformLaneView: View {
                         audio.selectedTrack = index
                         audio.selectedClipID = clip.id
                     }
-                    // minimumDistance 0 so an ordinary click counts, and the drag reports
-                    // where in the clip it landed — the split point a later change needs.
-                    // macOS ScrollViews pan with the wheel, not with a mouse drag, so this
-                    // doesn't cost the lane its scrolling.
-                    .gesture(
-                        DragGesture(minimumDistance: 0).onEnded { _ in
-                            audio.selectedTrack = index
-                            audio.selectedClipID = clip.id
-                        }
-                    )
+                    // Click to select; drag to take the take out of the app.
+                    //
+                    // This was a `DragGesture(minimumDistance: 0)` whose only effect was
+                    // selection — its value was discarded, so the "split point a later
+                    // change needs" the old comment promised was never read. A drag
+                    // gesture claiming every press with zero distance is also exactly what
+                    // would stop `.onDrag` from ever starting, so the two could not have
+                    // coexisted: swapping it for a tap is what makes the take draggable
+                    // out at all, and costs nothing that was in use.
+                    //
+                    // macOS ScrollViews pan with the wheel rather than a mouse drag, so
+                    // neither gesture costs the lane its scrolling.
+                    .onTapGesture {
+                        audio.selectedTrack = index
+                        audio.selectedClipID = clip.id
+                    }
+                    // The clip's own file, so what lands in Finder or a DAW is the take as
+                    // recorded — not a re-encode and not the track's mix. `contentsOf:`
+                    // returns nil only for a URL that cannot be read, and the provider is
+                    // still returned empty rather than dropped so the gesture begins.
+                    .onDrag { NSItemProvider(contentsOf: clip.url) ?? NSItemProvider() }
+                    .help("\(clip.url.lastPathComponent) \u{2014} click to select, drag to copy out")
                     // The menu-bar commands, cut down to the ones a take can answer —
                     // per §9.5 a context menu is the relevant subset of those, not a
                     // second command set that has to be kept in step by hand.
