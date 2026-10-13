@@ -185,13 +185,18 @@ struct IOSTrackRow: View {
                 .monospacedDigit()
                 .frame(width: 34, alignment: .trailing)
 
-            // Controls
-            IconToggle(label: "M", on: track.muted, tint: Theme.accent) { audio.toggleMute(index) }
-            IconToggle(label: "S", on: track.solo, tint: Color(red: 0x5C/255, green: 0xC8/255, blue: 0xE0/255)) { audio.toggleSolo(index) }
+            // Controls. `mark:` puts a text-level difference on mute and solo so the
+            // state is not carried by the fill colour alone — the same reasoning as the
+            // macOS row. The record dot changes *glyph* instead: hollow when idle,
+            // solid when armed, which is a shape difference rather than a tint.
+            let recordingThis = audio.isRecording && audio.selectedTrack == index
+            IconToggle(label: "M", mark: .struck, on: track.muted, tint: Theme.accent) { audio.toggleMute(index) }
+            IconToggle(label: "S", mark: .underlined, on: track.solo, tint: Color(red: 0x5C/255, green: 0xC8/255, blue: 0xE0/255)) { audio.toggleSolo(index) }
             IconToggle(system: track.isPlaying ? "pause.fill" : "play.fill", on: track.isPlaying, tint: Theme.accent) {
                 audio.toggleTrackPlayback(index)
             }
-            IconToggle(system: "circle.fill", on: audio.isRecording && audio.selectedTrack == index, tint: Theme.danger) {
+            IconToggle(system: recordingThis ? "circle.fill" : "circle",
+                       on: recordingThis, tint: Theme.danger) {
                 audio.toggleTrackRecord(index)
             }
         }
@@ -203,10 +208,19 @@ struct IOSTrackRow: View {
     }
 }
 
+/// The non-colour part of an `IconToggle`'s state, drawn through the letter rather than
+/// the fill, so the toggle still reads when the tint does not.
+enum IconToggleMark {
+    case none
+    case struck
+    case underlined
+}
+
 // Compact on/off button (≥44pt touch target).
 struct IconToggle: View {
     var system: String? = nil
     var label: String? = nil
+    var mark: IconToggleMark = .none
     let on: Bool
     let tint: Color
     let action: () -> Void
@@ -217,7 +231,10 @@ struct IconToggle: View {
                 if let system {
                     Image(systemName: system).font(.system(size: 15, weight: .medium))
                 } else if let label {
-                    Text(label).font(.system(size: 14, weight: .bold, design: .monospaced))
+                    Text(label)
+                        .font(.system(size: 14, weight: .bold, design: .monospaced))
+                        .strikethrough(mark == .struck && on)
+                        .underline(mark == .underlined && on)
                 }
             }
             .frame(width: 46, height: 46)

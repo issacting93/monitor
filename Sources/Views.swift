@@ -706,16 +706,26 @@ struct TrackControlsView: View {
             .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: track.isPlaying, hit: 44))
 
             Button { audio.toggleMute(index) } label: {
+                // The `filled:` state below already inverts this button in greyscale —
+                // gold fill with dark text, against a transparent box with grey text —
+                // so mute was not *purely* colour. The strike is a second, text-level
+                // difference on top of it: it survives Increase Contrast and any
+                // adjustment that washes the fill out, and it says "cut" in the same
+                // breath as the mixer vocabulary the rest of the app uses.
                 Text("M")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .strikethrough(track.muted)
                     .frame(width: 28, height: 28)
                     .foregroundColor(track.muted ? Theme.bg : Theme.textSecondary)
             }
             .buttonStyle(RetroButtonStyle(tint: Theme.accent, active: track.muted, filled: track.muted, hit: 44))
 
             Button { audio.toggleSolo(index) } label: {
+                // Underline rather than a strike, so solo and mute are distinguishable
+                // from each other without colour as well as from their own other state.
                 Text("S")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .underline(track.solo)
                     .frame(width: 28, height: 28)
                     .foregroundColor(track.solo ? Theme.bg : Theme.textSecondary)
             }
