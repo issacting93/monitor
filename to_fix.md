@@ -829,6 +829,21 @@ has already silenced. This was **not** a regression from `C4b`: the pre-`532c21b
 append was already dispatched, so the window is old — `C4b` widened it from one main-queue hop to a
 full file read, which is what made it reproducible.
 
+**Landed 2026-10-13** — §9 work, listed here as well because two of the five are defect repairs of the
+same kind as the batch above: found against the built app, not by a compiler.
+
+| Commit | What changed | Verified by |
+|---|---|---|
+| `bb52b9f` | the header's IN/OUT pickers actually switch the device — they assigned the published selection directly, and the engine reads it only at start time, so picking the OP-XY relabelled the picker and left the graph on the built-in mic | **hardware-confirmed by ear** — "yes it reads and there is sound". The first audio-path behaviour verified by listening in some time |
+| `53fb570` | the status line names the device the audio is really going to, not the system default | compile only; the string is on screen |
+| `66b24c4` | Return to Start seeks instead of stopping — it was an exact duplicate of Stop, because `stopAll` already returns to the start | compile only |
+| `61b0611` | §9 Stage 6 — context menus on a take, a track header and the transport, plus Escape | compile only; needs a right-click and a keypress |
+| `f4162de` | Delete clears the selected track's takes | compile only; the key mapping *was* verified against the live layout (`UCKeyTranslate`), which is what corrected an initial wrong guess |
+
+All four gates green after each. Nothing in the batch touches the engine graph, so none of it needs
+the OP-XY to be *trusted* — but `bb52b9f` is the one that changed the audio path, and it is also the
+one that has been heard.
+
 ## 8.8 Section 2 rebaseline
 
 Replace "# 2. Modular Sound Effects System" as written with the shipped reality and only keep the
@@ -889,12 +904,36 @@ grep -rn "\.commands|CommandMenu|CommandGroup|Settings \{|orderFrontStandardAbou
 
 No menus. No Settings scene. No About. No document-open handling. No dirty indicator. No recents.
 
+### 9.0.1 Status — updated 2026-10-13
+
+Three of the nine stages have landed, in the recommended order's first three positions. The audit
+block above and §9.6 are the **original 2026-10-12 snapshot** and are left in place as the record of
+what the gap was; §9.6 carries a status column showing what has since changed, and the line numbers
+there have been re-resolved.
+
+| Stage | Status | Commits |
+|---|---|---|
+| 4 — dirty guard, title, frame | ✅ landed | `b841bb7` (quit guard) · `1230728` (title, edited dot, remembered frame) |
+| 1 — the menu bar | ✅ landed | `3e35349` |
+| 6 — context menus + Escape | ✅ landed | `61b0611` · `f4162de` (Delete) |
+| 2 — Settings scene | not started | |
+| 3 — About, Help, `CREDITS.md` | not started — **carries the licensing obligation** | |
+| 5 — documents, recents, UTI, plist | not started | |
+| 7 — accessibility | not started | |
+| 8 — tooltips, empty states, progress | not started | |
+| 9 — Reveal, Share, notifications | not started | |
+
+Two things landed that this section did not plan, because they were found against the built app
+rather than by reading it. Both are recorded in §9.1.1: a pair of **device-selection defects** where
+the header's IN/OUT pickers moved a label without moving the audio, and a Transport item that
+duplicated Stop.
+
 **Research base:** Apple's *Building and customizing the menu bar with SwiftUI*; the community
 codification in `sindresorhus/human-interface-guidelines-extras`; and the macOS design /
 accessibility skill references (menu structure, Settings window rules, Reduce Motion, colour-only
 signalling). Sources are linked at the end of this section.
 
-### 9.0.1 Already conformant — do not re-do
+### 9.0.2 Already conformant — do not re-do
 
 - App Sandbox + hardened runtime (`Tape08/Tape08.entitlements`, `ENABLE_HARDENED_RUNTIME = YES`).
 - `NSMicrophoneUsageDescription` in both plists.
@@ -914,7 +953,7 @@ established workflow. Nothing in this section touches the engine graph, so none 
 hardware run to be trusted — but anything that changes a *shortcut* needs the §8.6 keyboard check
 re-run, because Stage 1 moves the bindings out of the monitor and into menus.
 
-### Stage 1 — The menu bar (highest impact)
+### Stage 1 — The menu bar (highest impact) — ✅ LANDED (`3e35349`)
 
 **Problem.** Every action is invisible and every shortcut unlearnable. `Edit > Undo` does not exist,
 so ⌘Z works but the menu says nothing; `File > Save` does not exist, so ⌘S is folklore.
@@ -961,6 +1000,33 @@ the plan is ⌃1 / ⌃2 (⌘1–⌘8 are already take-select) — and leave Tab 
 Stage 1**, because it is the
 stage that makes Tab a menu key equivalent; changing it later means re-teaching a shortcut.
 
+**What landed, 2026-10-12 (`3e35349`).** File (Open ⌘O · Save ⌘S · Save As… ⌘⇧S · Export Track… ⌘E ·
+Bounce Mixdown…), Edit (`CommandGroup(replacing: .undoRedo)`, so Undo ⌘Z and Redo ⌘⇧Z now agree with
+the menu — the live bug below is fixed), Transport (Play/Stop · Record · Return to Start · Metronome ·
+Tap Tempo · Quantize · Loop · Count-In), Track (Mute · Solo · Split at Playhead ⌘T · Duplicate Last
+Clip ⌘D · Select Track · Select Take ⌘1–⌘8), and View additions (Layout · Effects Chain · Follow
+Playhead · Zoom In ⌘= · Zoom Out ⌘−).
+
+**Four gaps against the table above, none of them accidental:**
+
+1. **No New Project item.** There is no multi-window and no session-reset command to wire it to; a
+   "New Project" would have to mean *clear everything*, which is `Clear All Tracks` under a name that
+   hides what it destroys. Left out rather than faked.
+2. **No Open Recent** — Stage 5's, correctly deferred.
+3. **No Trim menu item.** Trim is still reachable — the trim editor's own button (`Views.swift:2516`),
+   and since Stage 6 a take's context menu — but it is absent from the menu bar, which is the one
+   place §9.5 says a command belongs. Worth closing when Stage 2 opens the Settings scene.
+4. **The Tab decision was not made.** `Tab` is *still* a monitor binding (`App.swift:110`) and the
+   View menu's Layout picker carries no key equivalent, so the conflict this stage was told to settle
+   is still open: the app cannot gain keyboard focus navigation (Stage 7) while the monitor eats Tab.
+
+**And the monitor was not retired — deliberately.** The ⌘-modified bindings left it and now live in
+the menu bar; the bare keys (Space, R, M, S, Delete, 1–8, Return, comma, Tab, F) stayed. Giving a bare
+key a menu key equivalent is not the same trade as giving a ⌘ chord one: a menu key equivalent is
+matched *ahead of* the responder chain, so it would fire inside a focused preset-name field. The
+monitor's `firstResponder` guard is the protection a menu item cannot express, and the reasoning is
+recorded in `Tape08Commands`' header comment so it does not read as a half-finished migration.
+
 ### Stage 2 — A real Settings window (⌘,)
 
 **Problem.** `showSettings` is a floating drawer holding what are, by HIG definition, *preferences*.
@@ -992,7 +1058,7 @@ The product plan already asks for a `CREDITS.md`, and the effects are Airwindows
 Help menu item pointing at it. This is the one stage with a **legal** motivation, so treat the
 attribution text as required, not decorative.
 
-### Stage 4 — Don't lose the user's work (correctness, not polish)
+### Stage 4 — Don't lose the user's work (correctness, not polish) — ✅ LANDED (`b841bb7`, `1230728`)
 
 **Problem.** `projectDirty` exists and is maintained, but **nothing reads it on quit**.
 `applicationShouldTerminateAfterLastWindowClosed` returns `true` (`App.swift:271`), so ⌘W or the red
@@ -1037,7 +1103,7 @@ about it — and note that the *built* plist has neither `NSHumanReadableCopyrig
 `LSApplicationCategoryType`, both of which the Xcode plist does carry, which is exactly the
 divergence this stage exists to close.
 
-### Stage 6 — Context menus, and Escape
+### Stage 6 — Context menus, and Escape — ✅ LANDED (`61b0611`, `f4162de`)
 
 **Problem.** `grep -rn "\.contextMenu" Sources/` finds none. Every right-click on the timeline, a
 track header, a clip or the ruler does nothing, so the app's most natural surfaces are inert.
@@ -1054,6 +1120,39 @@ its CANCEL button (`Views.swift:2223-2233`), and the FX/Settings drawers likewis
 cancel trim, close whichever drawer is open, and clear the clip selection — in that order, one press
 each. This is the same class of change as a context menu (an expected input that is silently inert),
 so it rides in this stage rather than waiting for Stage 8.
+
+**What actually landed — three of the four surfaces, not four.** `.contextMenu` on a take, a track
+header and the transport. The ruler's **Seek Here is not there and cannot be**: `.contextMenu`
+reports no click location, so "here" is not expressible — and the ruler already seeks on click and
+drag (`DragGesture(minimumDistance: 0)`), so the item would have been redundant even if it worked.
+
+Each menu carries the menu-bar commands appropriate to the thing clicked, and the take menu
+**re-targets before every command that depends on the selection**. A right-click does not run the
+click gesture, and the take commands all resolve through `editTargetIndex`, which reads
+`selectedClipID` — so without that, right-clicking take 4 and choosing Split would have cut take 1
+while appearing to act on take 4. `Duplicate` takes its index directly and is deliberately left
+un-re-targeted.
+
+**The two omissions in the plan's own table, and why.** `Delete` on a take and `Clear Track` on a
+header were both listed. Neither operation existed. `clearAll` was global only, and there is no
+per-take delete at all. Rather than invent destructive commands from a context menu — with the undo,
+orphan-sweep and file-lifecycle questions that drag in — both were left out and reported as omitted.
+`Clear Track` has since landed the honest way, as a real operation (§9.1.1 and `f4162de`), and it is
+in both menus; **per-take delete still does not exist**, and the clip context menu still does not
+offer it. Delete *is* in the clip menu's table row above, so that row is currently wrong.
+
+`f4162de` also added the **Delete key**: it clears the selected track's takes. It could not have been
+done as a menu key equivalent for the reason in Stage 1 — a bare key handed to the menu bar fires
+inside a focused text field — so it lives in the monitor, behind the same `firstResponder` guard.
+Two notes worth keeping: a track's **lane cannot be removed** (`tracks` is a fixed `Theme.trackCount`
+array that the grid, the eight mixers and the MIDI channel map are all indexed by), so Delete empties
+the track and leaves the lane; and the keys are matched as `\u{8}` (the Delete key) and `\u{7F}`
+(fn+Delete) — `UCKeyTranslate` against the live layout gives exactly that pairing, which is the
+reverse of what the ASCII names BS/DEL suggest, so do not "correct" it.
+
+**Escape landed as `.onExitCommand`** on `ContentView` (`App.swift:435`), not as a monitor case.
+The monitor hands back every event it does not claim, and a focused text field has first call on
+Escape; a raw `NSEvent` branch would cancel a trim out from under a field the user is typing in.
 
 ### Stage 7 — Accessibility
 
@@ -1108,6 +1207,21 @@ nowhere; the only drag-and-drop in the app is *inbound* (`.onDrop`, `Views.swift
 produced and cannot be dragged to Finder or into a DAW — the standard way a Mac user moves audio out
 of an app. The exported file and the exported clip both want an `NSItemProvider`.
 
+### 9.1.1 Found and fixed while executing this section
+
+Not in the plan, because none of it was visible by reading — each was reported against the built app.
+
+| Reported | Cause | Fix |
+|---|---|---|
+| the signal meters stayed at −57.8 dB with the OP-XY selected | the header's IN/OUT pickers assigned `selectedInputID`/`selectedOutputID` directly, but the engine reads those **once, inside `EngineController.start`**. Nothing observed the properties — no `onChange`, no `didSet` — so picking the OP-XY relabelled the picker and left the graph pinned to the built-in mic. The engine's own status string was the only honest clue on screen | `bb52b9f` — the pickers route through `selectInput`/`selectOutput`, which restart the graph when monitoring. **Hardware-confirmed by the user** ("yes it reads and there is sound"), which makes this the first audio-path behaviour verified by ear in some time |
+| the status line named a device the audio was not going to | `currentOutputName` reports the **system default**, which is only the destination when no separate output is chosen. With one, the engine sits on a private input+output aggregate and the audio reaches that selection | `53fb570` — the status names the routed output when it differs from the input |
+| — | found while writing Stage 6: `stopAll` already returns to the start and clears `seekFraction`, so the Transport menu's **Return to Start was an exact duplicate of Stop** | `66b24c4` — it seeks now, which is what the label promises |
+
+**The iOS gap this exposed.** `switchOutput` is gated on `io.outputSelectionSupported`, and the iOS
+provider reports `false` — so `Views_iOS.swift` has no route picker at all, and a take recorded on
+iPad is monitored through the session's default route with no way to see or change which one. That is
+a real gap rather than a deliberate omission, and it is not covered by any stage above. **Unscheduled.**
+
 ## 9.2 What is deliberately not in scope
 
 - **A document-based architecture** (`DocumentGroup`, `NSDocument`). The app holds one session, and
@@ -1134,22 +1248,27 @@ of an app. The exported file and the exported clip both want an `NSItemProvider`
 
 ## 9.3 Priority
 
-| Priority | Stage | Why this order |
-|---|---|---|
-| **P0** | 4 — dirty guard | Only stage that prevents **data loss**. Can land any time; do it regardless of the rest. |
-| **P1** | 1 — menu bar | Largest discoverability gap; every action already exists, so it is wiring |
-| **P1** | 5 — documents + plist reconciliation | Double-click is broken *today* and the plists have diverged |
-| **P2** | 2 — Settings scene | Needed before shipping to MAS; ⌘, is expected |
-| **P2** | 3 — About + credits | Contains a licensing obligation |
-| **P2** | 6 — context menus | Depends on 1 |
-| **P3** | 7 — accessibility | Highest effort, cannot be auto-verified |
-| **P3** | 8 — tooltips / empty states / progress | |
-| **P3** | 9 — Reveal / Share / notifications | |
+| Priority | Stage | Status | Why this order |
+|---|---|---|---|
+| **P0** | 4 — dirty guard | ✅ done | Only stage that prevents **data loss**. Can land any time; do it regardless of the rest. |
+| **P1** | 1 — menu bar | ✅ done | Largest discoverability gap; every action already exists, so it is wiring |
+| **P1** | 5 — documents + plist reconciliation | next but one | Double-click is broken *today* and the plists have diverged |
+| **P2** | 2 — Settings scene | next | Needed before shipping to MAS; ⌘, is expected |
+| **P2** | 3 — About + credits | **overdue** | Contains a licensing obligation |
+| **P2** | 6 — context menus | ✅ done | Depends on 1 |
+| **P3** | 7 — accessibility | | Highest effort, cannot be auto-verified |
+| **P3** | 8 — tooltips / empty states / progress | | |
+| **P3** | 9 — Reveal / Share / notifications | | |
 
 **Suggested execution order** differs from priority because of dependencies: **4 → 1 → 6 → 2 → 3 → 5 →
 7 → 8 → 9**. Stage 4 is first because it is small, independent, and the only correctness item;
 Stage 5 is late despite being P1 because the bundle-id decision in it may want a deliberate answer
 rather than a rushed one.
+
+**Progress against that order, 2026-10-13:** the first three have landed, so the next is **Stage 2**,
+then **3**. Stage 3 is now the oldest outstanding item with an external obligation attached — the
+Airwindows attribution is a licensing term, not polish — and it has been overtaken by three stages
+that carry no such obligation. Worth moving ahead of Stage 5 if the order is being re-cut.
 
 ## 9.4 Verification
 
@@ -1166,10 +1285,18 @@ DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer xcodebuild -project Tap
 ```
 
 **Stages 1–3 and 6 are largely self-verifying**: a menu item that exists in the built app is a menu
-item that exists, and `sdef`/`strings` on the bundle shows the command set without launching it. The
-honest limit is that **whether a menu item is enabled at the right moment, and whether its shortcut
-collides with a live monitor binding, is a runtime property** — §8.6's keyboard check must be re-run
-after Stage 1, and it must now exercise the *menus*, not just the keys.
+item that exists. The honest limit is that **whether a menu item is enabled at the right moment, and
+whether its shortcut collides with a live monitor binding, is a runtime property** — §8.6's keyboard
+check must be re-run after Stage 1, and it must now exercise the *menus*, not just the keys.
+
+⚠️ **Correction, 2026-10-13 — `strings` does not verify a command set, and this section previously
+said it did.** It was tried against the built bundle and reported `TRIM`, `APPLY` and `Ready` as
+**missing** when all three are in the source, because **Swift stores string literals of 15 UTF-8
+bytes or fewer inline in the instruction stream rather than in the string table**. `Tape08MainWindow`
+(16 bytes) was visible; `Tape08` was not. So `strings` + `grep` cannot see most menu titles, most
+status strings, and essentially every short label — and a "not found" from it proves nothing in
+either direction. It was retracted rather than left standing. Verifying a menu now means launching
+the app and reading the menu bar; there is no offline substitute.
 
 **Stage 7 (accessibility) cannot be verified by any gate in this document.** It needs VoiceOver and
 the Accessibility Inspector, by hand. Listing it as "compile-verified" would be a false claim.
@@ -1300,4 +1427,41 @@ standard macOS behaviour — see the ⌘Z finding in Stage 1 and the Tab finding
 choice for a retro instrument, not an oversight, and this plan does not propose replacing them. What
 is proposed is narrower: that the app respond to **Increase Contrast** and **Reduce Motion**, and
 that mute/solo stop meaning "colour only" — both of which are correctness under a user's accessibility
-settings rather than a change of look.             
+settings rather than a change of look.
+
+### 9.6.1 Re-audit — 2026-10-13
+
+The tables above are the 2026-10-12 snapshot. These are the rows that have since moved, with line
+numbers re-resolved against the tree rather than adjusted by arithmetic.
+
+| # | Item | Was | Now | Where |
+|---|---|---|---|---|
+| 3 | `.commands` / `CommandGroup` / `CommandMenu` | ABSENT | **PRESENT** — `.commands` plus five groups | `App.swift:487`; groups at `:190` File, `:215` Edit, `:225` Transport, `:253` Track, `:295` View |
+| 4 | File ▸ New/Open/Save items | ABSENT | **PRESENT — 5 items, two gaps** | `App.swift:190-209`. No *New Project*, no *Open Recent* (Stage 5) |
+| 5 | `WindowGroup` sizing | PARTIAL | **PRESENT** | `.defaultSize(width: 1440, height: 900)` at `App.swift:486` |
+| 6 | Window frame autosave | ABSENT | **PRESENT** | `setFrameAutosaveName` at `App.swift:349` |
+| 7 | `NSApplicationDelegate` methods | ONE | **TWO** | `:495` terminate-after-close · `:505` `applicationShouldTerminate` |
+| 10 | Unsaved-changes guard on quit | ABSENT | **PRESENT** — Save / Cancel / Don't Save sheet | `App.swift:505-537` |
+| 12 | Window title / represented URL / edited dot | ABSENT | **PRESENT** | `App.swift:344-345`, `:428` |
+| 18 | Context menus | ABSENT (0) | **PRESENT — 3** | take `Views.swift:599` · track header `:773` · transport `:1590` |
+| 19 | Tooltips (`.help`) | 2 | **still 2**, lines drifted | `Views.swift:980`, `:1661` |
+| 20 | Keyboard shortcuts | 20 bindings, all invisible | **split in two** | see below |
+| 24 | Focus / keyboard navigation | ABSENT — Tab repurposed | **unchanged** — Tab is still a monitor binding | `App.swift:110` |
+| 25 | Escape handling | ABSENT | **PRESENT** | `.onExitCommand` at `App.swift:435` |
+
+**Item 20 has changed shape, and the binding table above is now wrong.** `3e35349` moved every
+**⌘-modified** binding out of the monitor and into the menu bar, where it carries a real
+`keyboardShortcut` and is therefore visible and learnable: ⌘O, ⌘S, ⌘⇧S, ⌘E, ⌘Z, ⌘⇧Z, ⌘T, ⌘D, ⌘1–⌘8
+and the ⌘-zoom pair (`App.swift:192-311`). The **bare keys stayed** in the monitor — Space, R, M, S,
+1–8, Return, comma, Tab, F, and Delete — as 17 `case` labels (`App.swift:40-115`), because a bare key
+handed to the menu bar is matched ahead of the responder chain and would fire inside a focused text
+field. So the table's rows for ⌘Z, ⌘S, ⌘O, ⌘E, ⌘T, ⌘D, ⌘1–⌘8 and ⌘-zoom now describe the **menu
+bar**, not the monitor, and its line numbers are all stale. **Delete is new and absent from that
+table entirely.**
+
+**Still ABSENT, verified again 2026-10-13:** items 1 (Settings scene — `App.swift:412`), 2 (About),
+9 (Open Recent), 11 (autosave / crash recovery), 13 (drag **out** — one `onDrop` at
+`Views.swift:668`; the `onDragStart`/`onDragEnd` at `Views.swift:190-217` are a *fader's* undo-gesture
+closures, not SwiftUI `.onDrag`, so a grep for "onDrag" is misleading here), 14, 15, 16, 17, 21, 22,
+23, 26–29, 30–33 and 35. Item 26–29 in particular: `grep -rn "accessibility" Sources/*.swift | wc -l`
+is **still 0**. Item 34 is still the single indeterminate `ProgressView` (`Views.swift:1565`).
