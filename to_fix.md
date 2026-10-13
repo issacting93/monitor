@@ -906,7 +906,7 @@ No menus. No Settings scene. No About. No document-open handling. No dirty indic
 
 ### 9.0.1 Status — updated 2026-10-13
 
-Four of the nine stages have landed, in the recommended order's first four positions. The audit
+Five of the nine stages have landed, in the recommended order's first five positions. The audit
 block above and §9.6 are the **original 2026-10-12 snapshot** and are left in place as the record of
 what the gap was; §9.6 carries a status column showing what has since changed, and the line numbers
 there have been re-resolved.
@@ -917,7 +917,7 @@ there have been re-resolved.
 | 1 — the menu bar | ✅ landed | `3e35349` |
 | 6 — context menus + Escape | ✅ landed | `61b0611` · `f4162de` (Delete) |
 | 2 — Settings scene | ✅ landed | `6f8e503` (menu metronome) · `de99668` (the window) · `d0de50b` (preferences) · `d3af3a1` (devices) |
-| 3 — About, Help, `CREDITS.md` | not started — **carries the licensing obligation** | |
+| 3 — About, Help, `CREDITS.md` | ✅ landed | `fb98d7b` |
 | 5 — documents, recents, UTI, plist | not started | |
 | 7 — accessibility | not started | |
 | 8 — tooltips, empty states, progress | not started | |
@@ -1092,7 +1092,7 @@ that the gear opens it, that Escape does *not* close it, the traffic-light state
 persistence round trip through a real launch. The store's accessor logic and the
 `didSet`-over-`@Published` mechanism were both verified by probe (§9.4).
 
-### Stage 3 — About panel, Help menu, and credits
+### Stage 3 — About panel, Help menu, and credits — ✅ LANDED (`fb98d7b`)
 
 **Problem.** `CommandGroup(replacing: .appInfo)` is absent, so About shows the system default — but
 more importantly there is nowhere that states the version, and **no attribution for the ported DSP**.
@@ -1103,6 +1103,43 @@ The product plan already asks for a `CREDITS.md`, and the effects are Airwindows
 `CFBundleVersion`, copyright, a credits line) reachable from the app menu, plus `CREDITS.md` and a
 Help menu item pointing at it. This is the one stage with a **legal** motivation, so treat the
 attribution text as required, not decorative.
+
+#### What landed, 2026-10-13 — and where it departed from the above
+
+**The obligation was worse than "no attribution".** MIT requires the copyright notice *and* the
+permission notice to be included in all copies of the software. The notice existed as one comment in
+`EffectsKernels.swift` — a source file, which is not a copy of the app. So nothing in the shipping
+`.app` named where the DSP came from, which is precisely the case the licence exists to cover. The
+full notice is now in the About panel's credits, inside the binary, reachable from the app menu and
+from Help. The text is quoted from the Airwindows repository's own `LICENSE` — fetched and read
+rather than written from memory — and it is quoted rather than paraphrased, because the wording *is*
+the licence.
+
+**The standard About panel, not a custom window.** A second departure from the doc's wording, and
+the same reasoning as Stage 2's fifth section: the panel brings the icon, the name, the two version
+strings from the bundle, the copyright, and its own sizing, so there is no layout of ours to get
+wrong. A bespoke window would re-implement that for no visible gain and add one more surface that no
+gate in §9.4 can check.
+
+**Help** replaces the stock "TAPE 08 Help" item, which pointed at a help book this app does not have.
+It opens the same panel, because the credits block *is* the licence text; a second copy in a bespoke
+Help window would be a third place for the notice to drift.
+
+**Two build-side things the panel forced, both found by trying:**
+
+| Found | Fix |
+|---|---|
+| `NSApplication.AboutPanelOptionKey` has **no `copyright` member** — the panel reads `NSHumanReadableCopyright` from the bundle itself. The Xcode plist had the key; `package.sh`'s generated plist did not, so the dev build's panel would have had no copyright line | the key added to `package.sh` |
+| `package.sh` wrote `CFBundleShortVersionString 1.0` / `CFBundleVersion 1.0`, where the project has `MARKETING_VERSION 1.0.0` / `CURRENT_PROJECT_VERSION 1`. Both are *shown* by the panel, so the dev build read "Version 1.0 (1.0)" — a build number that isn't one | aligned to the project's values, which shrinks Stage 5's reconciliation instead of adding to it |
+
+**Verified.** `strings` *can* see a 1.4 KB licence text, whatever §9.4's correction says about short
+literals — the grant, the requirement and the attribution line are each in the packaged binary once,
+with a known long literal as a positive control and absent text as the negative. The generated plist
+carries the copyright and the aligned version keys.
+
+**Not verified:** that the panel appears, that its credits area is legible in both appearances, and
+that the two menu items are where they should be. Running the app settles all three, and that is on
+the hardware run's list.
 
 ### Stage 4 — Don't lose the user's work (correctness, not polish) — ✅ LANDED (`b841bb7`, `1230728`)
 
@@ -1301,7 +1338,7 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 | **P1** | 1 — menu bar | ✅ done | Largest discoverability gap; every action already exists, so it is wiring |
 | **P1** | 5 — documents + plist reconciliation | next but one | Double-click is broken *today* and the plists have diverged |
 | **P2** | 2 — Settings scene | ✅ done | Needed before shipping to MAS; ⌘, is expected |
-| **P2** | 3 — About + credits | **overdue — next** | Contains a licensing obligation |
+| **P2** | 3 — About + credits | ✅ done | Contained a licensing obligation |
 | **P2** | 6 — context menus | ✅ done | Depends on 1 |
 | **P3** | 7 — accessibility | | Highest effort, cannot be auto-verified |
 | **P3** | 8 — tooltips / empty states / progress | | |
@@ -1312,10 +1349,9 @@ a real gap rather than a deliberate omission, and it is not covered by any stage
 Stage 5 is late despite being P1 because the bundle-id decision in it may want a deliberate answer
 rather than a rushed one.
 
-**Progress against that order, 2026-10-13:** the first four have landed, so the next is **Stage 3**,
-then **5**. Stage 3 is now the oldest outstanding item with an external obligation attached — the
-Airwindows attribution is a licensing term, not polish — and it has been overtaken by four stages
-that carry no such obligation. It is next, and worth keeping ahead of Stage 5.
+**Progress against that order, 2026-10-13:** the first five have landed, so the next is **Stage 5**,
+then **7**. Stage 3 was moved ahead of it and is done — the licensing obligation it carried has been
+discharged, and discharged in the app rather than in the repository, which is where MIT wanted it.
 
 ## 9.4 Verification
 
@@ -1527,9 +1563,11 @@ table entirely.**
 
 **Moved since:** item 1 (Settings scene) is **PRESENT** — `Settings {` at `App.swift:517`, the gear
 as a `SettingsLink` at `Views.swift:421`, and the scene supplies both the app-menu item and ⌘, with
-no `keyboardShortcut` written anywhere. Item 19 is still 2 tooltips.
+no `keyboardShortcut` written anywhere. Item 2 (About panel) is **PRESENT** — `AboutPanel.show()` from
+`CommandGroup(replacing: .appInfo)` at `App.swift:191`, Help replaced at `:215`, and the ported DSP's
+full MIT notice carried in the panel's credits. Item 19 is still 2 tooltips.
 
-**Still ABSENT, verified again 2026-10-13:** items 2 (About),
+**Still ABSENT, verified again 2026-10-13:** items
 9 (Open Recent), 11 (autosave / crash recovery), 13 (drag **out** — one `onDrop` at
 `Views.swift:668`; the `onDragStart`/`onDragEnd` at `Views.swift:190-217` are a *fader's* undo-gesture
 closures, not SwiftUI `.onDrag`, so a grep for "onDrag" is misleading here), 14, 15, 16, 17, 21, 22,
